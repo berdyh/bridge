@@ -1,0 +1,22 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "paths": {
+      "@berdyh/bridge": ["../packages/cli/src/index.ts"],
+      "@berdyh/bridge-protocol": ["../packages/protocol/src/index.ts"],
+      "@berdyh/bridge-pairing": ["../packages/pairing/src/index.ts"],
+      "@berdyh/bridge-crypto": ["../packages/crypto/src/index.ts"],
+      "@berdyh/bridge-client": ["../packages/client/src/index.ts"],
+      "@berdyh/bridge-runner": ["../packages/runner/src/index.ts"],
+      "@berdyh/bridge-plugin-sdk": ["../packages/plugin-sdk/src/index.ts"],
+      "@berdyh/bridge-server": ["../packages/server/src/index.ts"],
+      "@berdyh/bridge-server-cf": ["../packages/server-cf/src/index.ts"],
+      "@berdyh/bridge-server-d1": ["../packages/server-d1/src/index.ts"],
+      "ws": ["../packages/client/node_modules/@types/ws/index.d.ts"]
+    }
+  },
+  "include": ["src", "fixtures/*.ts", "*.ts"]
+}

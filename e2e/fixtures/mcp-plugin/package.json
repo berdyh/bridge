@@ -1,0 +1,7 @@
+{
+  "name": "e2e-mcp-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "e2e plugin: one MCP server with two tools and a headless set; the SDK is copied in by the test"
+}

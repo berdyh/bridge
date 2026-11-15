@@ -1,0 +1,30 @@
+name = "my-app-bridge"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+APP_ORIGIN = "https://app.example"
+CLERK_ISSUER = "https://your-app.clerk.accounts.dev"
+CLERK_CLIENT_ID = "your-public-oauth-client-id"
+# Set DATABASE_URL and CLERK_SECRET_KEY using Worker secrets, never vars.
+# Optional: CLERK_JWT_KEY (the instance's PEM public key, a public value) makes browser
+# JWTs verify locally; without it an unknown token kid makes the Worker call Clerk.
+#
+# Add a Cloudflare rate-limiting rule for /relay/* and /bridge/devices* (Security >
+# WAF > Rate limiting rules, or a [[unsafe.bindings]] ratelimit binding). The Worker
+# does not throttle: every unauthenticated request can cost a Clerk BAPI call.
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+# D1 alternative: replace the Neon store in worker.ts with createD1DeviceStore(env.DB).
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "my-app-bridge"
+# database_id = "<app-specific-database-id>"
+# migrations_dir = "./migrations"

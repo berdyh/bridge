@@ -1,0 +1,48 @@
+{
+  "name": "@berdyh/bridge",
+  "version": "0.2.1",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berdyh/bridge.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/berdyh/bridge/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/berdyh/bridge/issues"
+  },
+  "type": "module",
+  "description": "The bridge CLI",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "bridge": "bin/run.js",
+    "bridge-runner": "bin/run.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "pretypecheck": "pnpm --filter \"@berdyh/bridge^...\" build",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretest": "pnpm --filter \"@berdyh/bridge^...\" build",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@berdyh/bridge-pairing": "workspace:*",
+    "@berdyh/bridge-protocol": "workspace:*",
+    "@berdyh/bridge-runner": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.94.0",
+    "@berdyh/bridge-server": "workspace:*",
+    "@berdyh/bridge-server-node": "workspace:*"
+  }
+}

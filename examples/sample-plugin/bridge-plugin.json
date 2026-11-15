@@ -1,0 +1,13 @@
+{
+  "id": "sample",
+  "app": "sample-app",
+  "entry": "dist/plugin.js",
+  "permissions": {
+    "localUi": { "port": "auto" },
+    "agents": ["claude"],
+    "mcpServers": {
+      "notes": { "entry": "dist/mcp.js", "args": ["--notes-dir", "${PLUGIN_DATA}/notes"] }
+    },
+    "headless": { "tools": ["mcp__notes__search"] }
+  }
+}

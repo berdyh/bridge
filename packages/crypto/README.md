@@ -1,0 +1,3 @@
+# @berdyh/bridge-crypto
+
+The cryptography shared by the client and the runner: SPAKE2 (edwards25519) enrollment, long-term X25519 identities, HKDF session keys and the AES-256-GCM frame codec. It has no Node-only imports in its production path. The browser client (`@berdyh/bridge-client`) and the local runner (`@berdyh/bridge-runner`) each import it to enroll a browser and to encrypt the frames they exchange, so the relay and the app's server only ever see ciphertext. App authors and plugin authors do not call it directly. The byte-level composition is in [src/README.md](src/README.md); how enrollment fits in is covered in [Add the bridge to an app](../../docs/guides/add-to-an-app.md) and [Operate the runner](../../docs/guides/operate-the-runner.md).

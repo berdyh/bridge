@@ -1,0 +1,12 @@
+{
+  "id": "mcpplug",
+  "app": "mcp-app",
+  "entry": "plugin.mjs",
+  "permissions": {
+    "agents": ["claude", "codex"],
+    "mcpServers": {
+      "stub": { "entry": "mcp.mjs", "args": ["--secret-file", "${SESSION_SECRET_FILE}", "--probe-dir", "${PLUGIN_DATA}"] }
+    },
+    "headless": { "tools": ["mcp__stub__read", "mcp__stub__echo"] }
+  }
+}

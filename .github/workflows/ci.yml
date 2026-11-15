@@ -1,0 +1,55 @@
+name: CI
+
+# The checks listed under "Checks" in AGENTS.md, for pushes and pull requests in the public repository.
+# The job runs only there: copies of this file in other repositories skip it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.repository == 'berdyh/bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TMPDIR: ${{ github.workspace }}/.ci-local/tmp
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Scratch folder
+        run: mkdir -p "$TMPDIR"
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm run build
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Allow unprivileged user namespaces
+        # Ubuntu 24.04 runners block them through AppArmor; the runner's contained spawn needs `unshare --user --pid`.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install bubblewrap
+        # scripts/pack-check.sh runs the installer inside bwrap.
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends bubblewrap
+      - name: Unit tests
+        run: pnpm -r --workspace-concurrency=1 --filter '!@berdyh/bridge-e2e' test
+      - name: Install and pack scripts
+        run: node --test scripts/install.test.mjs scripts/release-set.test.mjs && bash scripts/pack-check.sh
+      - name: End-to-end (Node relay)
+        run: pnpm run e2e
+      - name: End-to-end (Cloudflare Workers through Miniflare)
+        run: pnpm run e2e:cf

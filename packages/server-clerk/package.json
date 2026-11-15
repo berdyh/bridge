@@ -1,0 +1,38 @@
+{
+  "name": "@berdyh/bridge-server-clerk",
+  "version": "0.2.1",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berdyh/bridge.git",
+    "directory": "packages/server-clerk"
+  },
+  "homepage": "https://github.com/berdyh/bridge/tree/main/packages/server-clerk#readme",
+  "bugs": {
+    "url": "https://github.com/berdyh/bridge/issues"
+  },
+  "type": "module",
+  "description": "Clerk AuthVerifier",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "pretypecheck": "pnpm --filter \"@berdyh/bridge-server-clerk^...\" build",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretest": "pnpm --filter \"@berdyh/bridge-server-clerk^...\" build",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@berdyh/bridge-protocol": "workspace:*",
+    "@berdyh/bridge-server": "workspace:*",
+    "@clerk/backend": "3.23.2"
+  }
+}

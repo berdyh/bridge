@@ -1,0 +1,9 @@
+{
+  "name": "@berdyh/bridge-e2e-cf",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "node run.mjs typecheck",
+    "gate": "node run.mjs test"
+  }
+}

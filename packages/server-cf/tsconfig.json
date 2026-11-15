@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node",
+      "@cloudflare/workers-types"
+    ],
+    "noEmit": true,
+    "paths": {
+      "@berdyh/bridge-server-cf": ["./src/index.ts"],
+      "@berdyh/bridge-server-clerk": ["../server-clerk/src/index.ts"],
+      "@berdyh/bridge-server-neon": ["../server-neon/src/index.ts"]
+    }
+  },
+  "include": [
+    "src",
+    "templates/worker.ts"
+  ]
+}

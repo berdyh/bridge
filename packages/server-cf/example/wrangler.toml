@@ -1,0 +1,27 @@
+name = "bridge-local-example"
+main = "worker.ts"
+compatibility_date = "2026-10-01"
+
+# No test auth by default. The harness supplies it explicitly on loopback.
+[vars]
+APP_ORIGIN = "http://127.0.0.1:8787"
+
+[alias]
+"@berdyh/bridge-server-cf" = "../src/index.ts"
+"@berdyh/bridge-server" = "../../server/src/index.ts"
+"@berdyh/bridge-protocol" = "../../protocol/src/index.ts"
+"@berdyh/bridge-server-d1" = "../../server-d1/src/index.ts"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bridge-local-example"
+database_id = "00000000-0000-0000-0000-000000000010"
+migrations_dir = "../../server-d1/migrations"

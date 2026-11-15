@@ -1,0 +1,7 @@
+# @berdyh/bridge-plugin-sdk
+
+What a local plugin imports: `definePlugin` gives the plugin a context with `registerMethod`, `startAgentSession`, `localUi.listen`, `dataDir` and `log`, and hides the JSON-RPC-over-stdio wire to the runner's plugin host. It is for app authors who ship code that runs on the user's machine next to the agent: the app packages the plugin, and the user installs it with `bridge plugin add`. The runner runs each plugin as a separate process, per app, with its own data folder. See [Write a plugin](../../docs/guides/write-a-plugin.md).
+
+For a background job with nobody to ask, `startAgentSession` can start a **contained** session (`tools.builtins: "none"`): the agent has none of its built-in tools, only the MCP servers the plugin declared in `permissions.mcpServers` and the tools the user approved at install. The request takes `mcpServers`, `tools.allow`, `secret`, `model`, `budget` and `headless`; the session gives `onUpdate(handler)` for tool-call, text, plan and usage events and `ended` for why it finished. Errors -32016 to -32019 are explained in [Write a plugin](../../docs/guides/write-a-plugin.md#5-errors). Contained sessions are claude only in this release.
+
+`session.sessionId` is the runner's session id: `bridge plugin audit <plugin>` prints it as `session <id>`, the runner log carries it as `sessionId`, and the session's working folder is named after it. Log it with your job id to correlate.

@@ -1,0 +1,3 @@
+# @berdyh/bridge-pairing
+
+The runner's OAuth device-grant client (RFC 8628): start a device authorization, poll for the token, refresh it, and keep tokens in an injected credential store (the OS keychain in the CLI). The runner (`@berdyh/bridge-runner`) and the CLI use it: `bridge connect` and `bridge setup` run the device grant once, and `bridge run` refreshes the token and reads it from the credential store. It authenticates the machine to the app's own server; it does not enroll browsers (see `@berdyh/bridge-crypto`). App authors do not call it directly. See [Operate the runner](../../docs/guides/operate-the-runner.md).

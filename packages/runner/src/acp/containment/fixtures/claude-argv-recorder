@@ -1,0 +1,23 @@
+#!/bin/sh
+# Test-only argv recorder for CLAUDE_CODE_EXECUTABLE (claude-argv.test.ts). Never shipped.
+#
+# A POSIX sh script with no extension on purpose: the SDK runs a .js/.mjs path as `node <path>`, so only a
+# real executable is exec'd the way the production binary is. It never runs a claude binary, never touches the
+# network or a login.
+#
+# Each invocation writes <BRIDGE_ARGV_RECORD_DIR>/<id>.argv (argv, NUL-terminated) and <id>.env (the env it was
+# started with). `auth status --json` is answered with `{}` and exit 0 (a failed probe is only logged by the
+# adapter); every other invocation, the session argv included, exits 126, which the adapter reports as a
+# `session/new` error after about 25 ms.
+dir=${BRIDGE_ARGV_RECORD_DIR:?BRIDGE_ARGV_RECORD_DIR is not set}
+id="$$-$(date +%s%N)"
+printf '%s\0' "$@" > "$dir/$id.argv.tmp"
+env > "$dir/$id.env.tmp"
+mv "$dir/$id.env.tmp" "$dir/$id.env"
+mv "$dir/$id.argv.tmp" "$dir/$id.argv"
+if [ "$#" -eq 3 ] && [ "$1" = auth ] && [ "$2" = status ] && [ "$3" = --json ]; then
+  printf '{}\n'
+  exit 0
+fi
+echo "claude-argv-recorder: refused" >&2
+exit 126

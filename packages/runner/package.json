@@ -1,0 +1,39 @@
+{
+  "name": "@berdyh/bridge-runner",
+  "version": "0.2.1",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/berdyh/bridge.git",
+    "directory": "packages/runner"
+  },
+  "homepage": "https://github.com/berdyh/bridge/tree/main/packages/runner#readme",
+  "bugs": {
+    "url": "https://github.com/berdyh/bridge/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter \"@berdyh/bridge-runner^...\" build",
+    "test": "vitest run --passWithNoTests --exclude src/acp/confined.integration.test.ts && vitest run src/acp/confined.integration.test.ts",
+    "pretest": "pnpm --filter \"@berdyh/bridge-runner^...\" build"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.8.0",
+    "@berdyh/bridge-crypto": "workspace:*",
+    "@berdyh/bridge-pairing": "workspace:*",
+    "@berdyh/bridge-protocol": "workspace:*",
+    "@anthropic-ai/sandbox-runtime": "0.0.81"
+  }
+}
