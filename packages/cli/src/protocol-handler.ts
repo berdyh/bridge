@@ -126,7 +126,8 @@ export async function runHandleUrl(args: string[], deps: CliDeps, options: Handl
       await (options.startRunner ?? terminalStartRunner(deps))();
     } else {
       deps.stdout(`Setting up ${action.origin}\n`);
-      await openTerminalOf(deps)([launcherOf(deps), "setup", action.origin]);
+      // `--from-link`: a page fired this, so setup's one question defaults to no. Nothing else from the URL is passed.
+      await openTerminalOf(deps)([launcherOf(deps), "setup", action.origin, "--from-link"]);
     }
   } catch (error) {
     deps.stderr(`bridge handle-url: ${errorMessage(error)}\n`);
@@ -514,7 +515,8 @@ export async function installProtocolHandler(deps: CliDeps, options: ProtocolOpt
   // A caller that showed `installPlan` in its own consent already printed the lines and asked.
   const shown = options.consented === true && options.installPlan !== undefined;
   const planned = shown ? options.installPlan! : await planInstall(files, entry);
-  const ok = shown || (await consent(deps, protocolInstallLines(deps, planned), "Register the bridge:// handler?", options));
+  // `consented` without a plan: the caller listed the paths in its own consent (setup); nothing is printed or asked here.
+  const ok = shown || options.consented === true || (await consent(deps, protocolInstallLines(deps, planned), "Register the bridge:// handler?", options));
   if (!ok) {
     deps.stderr("bridge protocol install: cancelled\n");
     return "cancelled";

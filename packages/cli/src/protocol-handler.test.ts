@@ -136,7 +136,8 @@ describe("handle-url", () => {
   it("bridge://setup opens a terminal running `bridge setup <origin>` and prints the origin", async () => {
     h = await harness();
     expect(await runHandleUrl(["bridge://setup?url=https%3A%2F%2Fapp.example%2F"], h.deps)).toBe(0);
-    expect(h.terminals).toEqual([[launcher(), "setup", "https://app.example"]]);
+    // `--from-link`: the one question defaults to no for a run a web page started.
+    expect(h.terminals).toEqual([[launcher(), "setup", "https://app.example", "--from-link"]]);
     expect(h.out.join("")).toContain("https://app.example");
     expect(h.terminals.flat()).not.toContain("--yes");
   });

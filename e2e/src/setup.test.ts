@@ -45,7 +45,7 @@ function eventsOf(output: string): Record<string, unknown>[] {
   return output.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
 }
 
-describe("bridge setup on a terminal: one command, no typed code, four matching words", () => {
+describe("bridge setup on a terminal: one command, one question, no typed code, the browser it opened", () => {
   let app: AppDeployment;
   let machine: Machine;
   let page: HeadlessPage;
@@ -83,31 +83,29 @@ describe("bridge setup on a terminal: one command, no typed code, four matching 
   it("connects, starts the runner in this terminal and opens the enroll page with the code in the link", async () => {
     setup = machine.start(["setup", app.server.url, "--foreground", "--no-install"], {}, { tty: true });
     // The person is at the terminal: every question is answered only once it is asked.
-    await setup.waitFor(/Connect this machine to App setup-app at \S+\? \[y\/N\]/, { stream: "stderr" });
+    await setup.waitFor(/Set up bridge for App setup-app at \S+\? \[Y\/n\]/, { stream: "stderr" });
     setup.write("y\n");
-    await setup.waitFor(/Runner online\. Opening \S+#code=/);
+    await setup.waitFor(/Runner online\. Opening App setup-app's enroll page in your browser\./);
     link = await openedEnrollLink(app, machine);
-    // The terminal printed the link; its code is the one in the fragment and nowhere else (it is also shown for a person who cannot click).
     expect(link).toMatch(new RegExp(`^${app.server.url}${ENROLL_PAGE}#code=[A-Z0-9-]{8,12}&runner=\\S+$`));
+    // The browser setup opened is trusted without the words, so the code and the link are not printed for anyone to paste elsewhere.
+    const code = /#code=([^&]+)/.exec(link)![1]!;
+    expect(setup.stdout() + setup.stderr()).not.toContain(code);
   });
 
-  it("the page consumes the link (it never types the code) and its words equal the terminal's before anything is trusted", async () => {
+  it("the page consumes the link (it never types the code), is trusted without a question, and the terminal shows its words and how to revoke it", async () => {
     const pairing = await page.pair(link);
     expect(page.fragmentAfterConsume, "consumeEnrollLink scrubs the code from the page URL").toBe("");
     pageWords = await pairing.words;
     expect(pageWords).toHaveLength(4);
-    // The words go to stdout and the question to stderr: wait for each on its own stream, not one for the other.
-    shownWords = terminalWords((await setup.waitFor(/^ {2}\S+ {2}\S+ {2}\S+ {2}\S+$/m))[0]);
-    await setup.waitFor(/Same words\? \[y\/N\]/, { stream: "stderr" });
-    // The comparison itself: asserted before the person says yes, not inferred from the pairing succeeding.
-    expect(shownWords).toEqual(pageWords);
-    // Nothing is trusted while the words are unanswered.
-    expect(await machine.exec(["browsers", "list", "setup-app"]).then((r) => r.stdout)).not.toMatch(/[A-Za-z0-9_-]{22}/);
-    setup.write("y\n");
     const enrolled = await pairing.enrolled;
     enrolledKeyId = enrolled.browserKeyId;
     runnerId = enrolled.runnerId;
+    await setup.waitFor(/Trusting the browser '[^']*' that setup opened/);
+    shownWords = terminalWords((await setup.waitFor(/^ {2}\S+ {2}\S+ {2}\S+ {2}\S+$/m))[0]);
+    expect(shownWords).toEqual(pageWords);
     await setup.waitFor(/Ready: App setup-app can use your coding agent/);
+    expect(setup.stdout()).toContain(`bridge browsers revoke setup-app ${enrolledKeyId}`);
   });
 
   it("status went no_runner, online_not_enrolled, ready", async () => {
@@ -125,12 +123,11 @@ describe("bridge setup on a terminal: one command, no typed code, four matching 
     expect(answer.text).toMatch(/^agent\[\d+\] echo: after setup$/);
   });
 
-  it("asked exactly the questions of a terminal run, and the words were the last (a person's step)", () => {
-    // Every question setup asked is on stderr with its answer marker: two of them, the words one last.
+  it("asked exactly one question", () => {
+    // Every question setup asked is on stderr with its answer marker: one.
     const questions = setup.stderr().match(/^.*\[(?:y\/N|Y\/n)\].*$/gm) ?? [];
-    expect(questions).toHaveLength(2);
-    expect(questions[0]).toMatch(/^Connect this machine to App setup-app at /);
-    expect(questions[1]).toMatch(/Same words\?/);
+    expect(questions).toHaveLength(1);
+    expect(questions[0]).toMatch(/^Set up bridge for App setup-app at /);
     expect(setup.stdout()).toContain("press Ctrl-C to stop it");
   });
 

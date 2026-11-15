@@ -72,7 +72,10 @@ async function appServer(idp: Oauth, enrollPage: string | undefined = "/bridge/e
 }
 
 const OK: CommandResult = { exitCode: 0, stdout: "", stderr: "" };
-const SERVICE_AND_HANDLER = "Run the runner as a background service, and register the bridge:// handler the page's Start button uses?";
+/** setup's one question. */
+const ONE = (url: string): string => `Set up bridge for Demo App at ${url}?`;
+/** The last line when no agent can run (the tests' machine has none unless a test adds one). */
+const PAIRED_NO_AGENT = "Paired: Demo App trusts that browser, but no coding agent is ready on this machine";
 const FAR = "2999-01-01T00:00:00.000Z";
 
 interface World {
@@ -152,6 +155,8 @@ async function world(over: Partial<CliDeps> = {}, options: Parameters<typeof fak
     ...over,
   });
   fakeMachine(h.deps, h.commands, options);
+  // No agent's own command on PATH unless a test puts one there (`onPath`).
+  h.deps.env.PATH = path.join(h.root, "bin");
   return w;
 }
 
@@ -203,24 +208,29 @@ const until = async (cond: () => boolean, ms = 5000): Promise<void> => {
 };
 
 describe("bridge setup on a terminal", () => {
-  it("walks the prompts in order, lists every path before it writes, opens the two links, and ends at the four words", async () => {
+  it("asks one question after one grouped path list, opens the two links, and trusts the browser it opened without the words", async () => {
     const w = await world();
-    let beforeServiceQuestion = "";
+    let beforeQuestion = "";
     w.answer = (q) => {
-      if (q.startsWith("Run the runner")) beforeServiceQuestion = printed();
+      if (q === ONE(w.server.url)) beforeQuestion = printed();
       return true;
     };
     expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
 
-    // One consent covers the service and the bridge:// handler, listing the paths of both before it asks.
-    expect(w.asked).toEqual([
-      { question: `Install bridge ${CLI_VERSION} for this user?`, default: undefined },
-      { question: `Connect this machine to Demo App at ${w.server.url}?`, default: undefined },
-      { question: SERVICE_AND_HANDLER, default: "yes" },
-      { question: "Same words?", default: "no" },
-    ]);
-    for (const listed of [runnerPathsOf(h.deps).serviceFile, path.join(h.deps.configDir, "mimeapps.list"), path.join(h.deps.dataDir, "applications", "bridge-url-handler.desktop")]) {
-      expect(beforeServiceQuestion).toContain(listed);
+    // One consent covers install, connect and the service with the bridge:// handler, listing every path, grouped, before it asks.
+    expect(w.asked).toEqual([{ question: ONE(w.server.url), default: "yes" }]);
+    const groups = ["install bridge", "connect this machine to Demo App", "run the runner as a background service, and register the bridge:// handler"].map((g) => beforeQuestion.indexOf(g));
+    expect(groups.every((i) => i > 0)).toBe(true);
+    expect([...groups].sort((a, b) => a - b)).toEqual(groups);
+    for (const listed of [
+      path.join(h.deps.dataDir, "bridge", "versions", CLI_VERSION),
+      launcherPathOf(h.deps),
+      appsFilePath(h.deps),
+      runnerPathsOf(h.deps).serviceFile,
+      path.join(h.deps.configDir, "mimeapps.list"),
+      path.join(h.deps.dataDir, "applications", "bridge-url-handler.desktop"),
+    ]) {
+      expect(beforeQuestion).toContain(listed);
     }
 
     const text = printed();
@@ -236,8 +246,25 @@ describe("bridge setup on a terminal", () => {
     ]) {
       expect(text).toContain(listed);
     }
-    expect(text).toContain(wordsOf("kid-1").join("  "));
-    expect(text).toContain("Ready: Demo App can use your coding agent");
+    // The words are shown as information, with the way to revoke the browser; the enroll code and link are not printed.
+    expect(text).toContain(`Trusting the browser 'Firefox' that setup opened. Its page shows these four words:\n  ${wordsOf("kid-1").join("  ")}\n`);
+    expect(text).toContain("Not your browser? Revoke it: `bridge browsers revoke demo kid-1`");
+    expect(text).not.toContain("BCDFGHJK");
+    expect(text).not.toContain("/bridge/enroll#");
+    expect(text).not.toContain(WORDS_RULE);
+    // No agent on this machine: the last line says what is missing instead of "Ready".
+    expect(text).toContain(PAIRED_NO_AGENT);
+    expect(text).not.toContain("Ready:");
+    // The grouped list is the only one: no step prints its own path list or consent text after the yes.
+    const count = (needle: string): number => text.split(needle).length - 1;
+    expect(count(runnerPathsOf(h.deps).serviceFile)).toBe(1);
+    expect(count(appsFilePath(h.deps))).toBe(1);
+    expect(count(path.join(h.deps.configDir, "mimeapps.list"))).toBe(1);
+    expect(text).not.toContain("These paths will be written");
+    expect(text).not.toContain("Sign-in: ");
+    expect(text).toContain(`Installed bridge ${CLI_VERSION}: `);
+    expect(text).toContain("Installed bridge-runner.service.");
+    expect(text).toContain("Registered the bridge:// handler.");
 
     const [app] = await loadApps(h.deps);
     expect(h.opened).toEqual([`${w.idp.url}/activate`, `${w.server.url}/bridge/enroll#code=BCDFGHJK&runner=${app!.runnerId}`]);
@@ -251,42 +278,47 @@ describe("bridge setup on a terminal", () => {
     expect(h.commands.some((c) => c.join(" ").includes("enable --now"))).toBe(true);
   });
 
-  it("--no-open prints the links instead of opening them", async () => {
+  it("--no-open prints the links instead of opening them, and the browser is trusted only with the words", async () => {
     const w = await world();
     expect(await runCli(["setup", w.server.url, "--no-open"], h.deps)).toBe(0);
     expect(h.opened).toEqual([]);
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url), "Same words?"]);
     expect(printed()).toContain(`${w.idp.url}/activate`);
     expect(printed()).toContain(`${w.server.url}/bridge/enroll#code=BCDFGHJK`);
   });
 
-  it("declining the install question writes and connects nothing", async () => {
+  it("a no to the one question writes, connects and runs nothing, and ends in cancelled", async () => {
     const w = await world();
     w.answer = () => false;
-    expect(await runCli(["setup", w.server.url], h.deps)).toBe(1);
+    const before = await tree(h.root);
+    expect(await runCli(["setup", w.server.url, "--no-open"], h.deps)).toBe(1);
+    expect(await tree(h.root)).toEqual(before);
     expect(await loadApps(h.deps)).toEqual([]);
     expect(w.idp.requests).toEqual([]);
     expect(h.commands).toEqual([]);
     expect(w.asked).toHaveLength(1);
+    expect(h.err.join("")).toContain("bridge setup: cancelled");
   });
 
-  it("declining the connect question stops before pairing", async () => {
+  it("--from-link (a bridge://setup link started it) asks the one question with a default of no", async () => {
     const w = await world();
-    w.answer = (q) => !q.startsWith("Connect");
-    expect(await runCli(["setup", w.server.url], h.deps)).toBe(1);
-    expect(w.idp.requests).toEqual([]);
+    w.answer = () => false;
+    expect(await runCli(["setup", w.server.url, "--from-link"], h.deps)).toBe(1);
+    expect(w.asked).toEqual([{ question: ONE(w.server.url), default: "no" }]);
     expect(await loadApps(h.deps)).toEqual([]);
+    expect(w.idp.requests).toEqual([]);
   });
 
   it("the four words are asked even with --yes, and a no leaves the browser untrusted", async () => {
     const w = await world();
     w.answer = (q) => q === "Same words?" ? false : true;
-    expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(1);
+    expect(await runCli(["setup", w.server.url, "--yes", "--no-open"], h.deps)).toBe(1);
     // --yes answered install, connect, service and handler; only the words reached the person.
     expect(w.asked.map((a) => a.question)).toEqual(["Same words?"]);
     expect(w.trustAnswers).toEqual([false]);
     expect(w.trusted).toEqual([]);
     expect(printed()).not.toContain("Ready:");
-    expect(printed()).toContain("These paths will be written");
+    expect(printed()).toContain("these paths will be written");
     expect(printed()).toContain(launcherPathOf(h.deps));
     expect(printed()).toContain(runnerPathsOf(h.deps).serviceFile);
   });
@@ -299,34 +331,26 @@ describe("bridge setup on a terminal", () => {
       if (q === "Same words?") before = printed();
       return answer(q);
     };
-    expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
+    expect(await runCli(["setup", w.server.url, "--yes", "--no-open"], h.deps)).toBe(0);
     expect(w.asked.map((a) => a.question)).toEqual(["Same words?"]);
     expect(w.trusted).toHaveLength(1);
     // An agent may be driving the terminal: the ask-the-person rule comes before the question.
     expect(before).toContain(WORDS_RULE);
   });
 
-  it("declining the service keeps the question honest: the install of the service is skipped and the runner starts here", async () => {
-    const w = await world({ signal: AbortSignal.abort(), sleep: shortSleep });
-    w.answer = (q) => !q.startsWith("Run the runner");
-    // The signal is aborted before setup starts: setup honours it, so the in-process runner stops at
-    // once and setup reports that it stopped before it was online.
-    expect(await runCli(["setup", w.server.url, "--no-open"], h.deps)).toBe(1);
-    expect(h.err.join("")).toContain("bridge setup: the runner stopped before it was online");
-    await expect(lstat(runnerPathsOf(h.deps).serviceFile)).rejects.toThrow();
-    expect(h.commands.some((c) => c[0] === "systemctl" && c.includes("enable"))).toBe(false);
-    expect(printed()).toContain("Not installing the service or the bridge:// handler");
-    expect(printed()).toContain("Starting the runner in this terminal");
-    // The one consent covered the handler too: no second question, nothing registered.
-    expect(w.asked.some((a) => a.question.startsWith("Register the bridge:// handler"))).toBe(false);
-    expect(await exists(path.join(h.deps.configDir, "mimeapps.list"))).toBe(false);
-  });
-
-  it("the setting setup.service=ask asks the service question with no default", async () => {
+  it("the setting setup.service=ask asks the one question with no default", async () => {
     const w = await world({ setupConfig: { service: "ask" } });
     expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
-    expect(w.asked.find((a) => a.question.startsWith("Run the runner"))).toEqual({ question: SERVICE_AND_HANDLER, default: "none" });
-    expect(w.asked.some((a) => a.question.startsWith("Register the bridge:// handler"))).toBe(false);
+    expect(w.asked[0]).toEqual({ question: ONE(w.server.url), default: "none" });
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url)]);
+  });
+
+  it("with setup.service=ask, --yes on a terminal needs --service or --foreground", async () => {
+    const w = await world({ setupConfig: { service: "ask" } });
+    expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(1);
+    expect(h.err.join("")).toContain("choose with --service or --foreground");
+    expect(w.asked).toEqual([]);
+    expect(await loadApps(h.deps)).toEqual([]);
   });
 
   it("with setup.service=ask, --yes alone does not answer the service question and a non-terminal run must choose", async () => {
@@ -350,7 +374,7 @@ describe("bridge setup on a terminal", () => {
   it("--service is the choice, not the consent: it still asks with the paths unless --yes", async () => {
     const w = await world({ setupConfig: { service: "ask" } });
     expect(await runCli(["setup", w.server.url, "--service"], h.deps)).toBe(0);
-    expect(w.asked.find((a) => a.question.startsWith("Run the runner"))).toMatchObject({ default: "yes" });
+    expect(w.asked[0]).toEqual({ question: ONE(w.server.url), default: "yes" });
   });
 
   it("--foreground never writes a service", async () => {
@@ -358,9 +382,9 @@ describe("bridge setup on a terminal", () => {
     // The already-aborted signal stops the in-process runner at once (see above).
     expect(await runCli(["setup", w.server.url, "--foreground", "--no-open"], h.deps)).toBe(1);
     expect(h.err.join("")).toContain("bridge setup: the runner stopped before it was online");
-    expect(w.asked.some((a) => a.question.startsWith("Run the runner"))).toBe(false);
-    // Nor the bridge:// handler: no question, nothing written, and how to add it later.
-    expect(w.asked.some((a) => a.question.includes("bridge://"))).toBe(false);
+    // Neither the service nor the bridge:// handler is in the one consent: nothing written, and how to add it later.
+    expect(printed()).not.toContain("background service");
+    expect(printed()).not.toContain("register the bridge:// handler");
     expect(await exists(path.join(h.deps.configDir, "mimeapps.list"))).toBe(false);
     expect(printed()).toContain("Not registering the bridge:// handler (--foreground)");
     expect(printed()).toContain("`bridge protocol install`");
@@ -379,16 +403,18 @@ describe("bridge setup on a terminal", () => {
     expect(printed()).not.toContain("Starting the runner in this terminal");
   });
 
-  it("where no bridge:// handler exists (macOS), the consent lists and asks about the service only", async () => {
+  it("where no bridge:// handler exists (macOS), the consent lists the service only", async () => {
     const w = await world({ platform: "darwin", sleep: async () => {} });
     let beforeQuestion = "";
     w.answer = (q) => {
-      if (q.startsWith("Run the runner")) beforeQuestion = printed();
+      if (q === ONE(w.server.url)) beforeQuestion = printed();
       return true;
     };
     // Nothing reports the runner online here; the question and its list are what is checked.
     expect(await runCli(["setup", w.server.url, "--no-open"], h.deps)).toBe(1);
-    expect(w.asked.find((a) => a.question.startsWith("Run the runner"))).toEqual({ question: "Run the runner as a background service?", default: "yes" });
+    expect(w.asked).toEqual([{ question: ONE(w.server.url), default: "yes" }]);
+    expect(beforeQuestion).toContain("run the runner as a background service:");
+    expect(beforeQuestion).not.toContain("bridge:// handler");
     expect(beforeQuestion).toContain(runnerPathsOf(h.deps).serviceFile);
     expect(beforeQuestion).not.toContain("mimeapps.list");
     expect(beforeQuestion).not.toContain("bridge-url-handler.desktop");
@@ -400,6 +426,46 @@ describe("bridge setup on a terminal", () => {
     const steps = jsonLines()[0]!.steps as { id: string; state: string; paths: string[] }[];
     expect(steps.find((s) => s.id === "service")).toMatchObject({ state: "foreground", paths: [] });
     expect(steps.find((s) => s.id === "handler")).toMatchObject({ state: "foreground", paths: [] });
+  });
+
+  it("only the window's first trust request skips the words: a second one is asked, and its browser gets no revoke line", async () => {
+    const w = await world();
+    h.deps.e2ee = {
+      ...h.deps.e2ee!,
+      // The first attempt was trusted but never delivered (the runner withdrew it); a second browser then asks.
+      enroll: async (_app, prompt) => {
+        prompt.showCode("BCDFGHJK", FAR);
+        w.trustAnswers.push(await prompt.confirm({ label: "Firefox", keyId: "kid-1" }));
+        w.trustAnswers.push(await prompt.confirm({ label: "Other", keyId: "kid-2" }));
+        w.trusted.push({ browserKeyId: "kid-2" });
+        return { browserKeyId: "kid-2", label: "Other", enrolledAt: "2026-10-21T00:01:00.000Z" };
+      },
+    };
+    expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
+    expect(w.trustAnswers).toEqual([true, true]);
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url), "Same words?"]);
+    expect(printed()).toContain(`Browser 'Other' asks to be trusted. The page shows four words.\n  ${wordsOf("kid-2").join("  ")}`);
+    expect(printed()).not.toContain("Revoke it");
+  });
+
+  it("an enroll link that fails to open prints the link and code and falls back to the words", async () => {
+    const w = await world();
+    const open = h.deps.openUrl!;
+    h.deps.openUrl = async (url) => (url.includes("/bridge/enroll#") ? Promise.reject(new Error("no browser")) : open(url));
+    expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url), "Same words?"]);
+    expect(printed()).toContain(`Could not open a browser. Open ${w.server.url}/bridge/enroll#code=BCDFGHJK`);
+    expect(printed()).toContain("(code: BCDFGHJK");
+    expect(printed()).not.toContain("Revoke it");
+  });
+
+  it("--json on a terminal never trusts by itself: the words go to `enroll approve`", async () => {
+    const w = await world();
+    // No window, so there is no pending attempt for the words to be given to.
+    expect(await runCli(["setup", w.server.url, "--yes", "--json"], h.deps)).toBe(1);
+    expect(w.trustAnswers).toEqual([false]);
+    expect(jsonLines().some((e) => e.event === "trust_request")).toBe(true);
+    expect(jsonLines().at(-1)).toMatchObject({ event: "error", code: "enroll_unconfirmed" });
   });
 
   it("--service and --foreground together are a usage error", async () => {
@@ -419,59 +485,101 @@ const claudeSignedIn = async (): Promise<void> => {
   await mkdir(path.join(h.root, "home/.claude"), { recursive: true });
   await writeFile(path.join(h.root, "home/.claude/.credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "c1" } }));
 };
-const COPY_QUESTION = "Copy your claude login into bridge's folder?";
-const SIGN_IN_QUESTION = "Sign in to claude for bridge now?";
+/** Puts the agents' own commands (`claude`, `codex`) on the PATH setup looks at. */
+async function onPath(...agents: string[]): Promise<void> {
+  const bin = path.join(h.root, "bin");
+  await mkdir(bin, { recursive: true });
+  for (const agent of agents) await writeFile(path.join(bin, agent), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+}
+/** The agent's own login, run by setup, writes its login into the folder it was pointed at. */
+function loginLands(): void {
+  h.spawnResult.onRun = async (_command, _args, env) => {
+    const dir = env.CLAUDE_CONFIG_DIR!;
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "bridge-own" } }));
+  };
+}
 
-describe("bridge setup agent logins", () => {
-  it("asks copy then sign-in between connect and the service question, and --yes answers neither", async () => {
-    const w = await world({ adapters: agentAdapters({ claude: true, codex: false }) });
+describe("bridge setup agents", () => {
+  it("an agent on PATH: the one consent lists bridge's adapter and a separate sign-in, never a copy, and a failed adapter download does not stop setup", async () => {
+    const w = await world({ adapters: agentAdapters({ claude: false, codex: false }) });
+    await onPath("claude");
+    // The person's own login is there: setup never copies it.
     await claudeSignedIn();
-    w.answer = (q) => !(q === COPY_QUESTION || q === SIGN_IN_QUESTION);
+    loginLands();
+    let beforeQuestion = "";
+    w.answer = (q) => {
+      if (q === ONE(w.server.url)) beforeQuestion = printed();
+      return true;
+    };
+    expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url)]);
+    expect(beforeQuestion).toContain("bridge's claude adapter (about 300 MB from the npm registry)");
+    expect(beforeQuestion).toContain("a separate claude sign-in for bridge");
+    expect(beforeQuestion).toContain(path.join(h.deps.dataDir, "bridge", "adapters", "claude"));
+    expect(beforeQuestion).toContain(agentDirOf(h.deps, "claude"));
+    // codex is not on PATH: only named, with the commands that set it up later.
+    expect(beforeQuestion).toContain("codex: not found on PATH; once it is installed, run `bridge agent install codex` (about 450 MB)");
+    // The adapter download ran and failed (the fake npm lays out no adapter): reported with the command, and setup went on.
+    expect(h.commands.some((c) => c[0] === "npm" && c.at(-1)!.startsWith("@agentclientprotocol/claude-agent-acp@"))).toBe(true);
+    expect(printed()).toContain("The claude adapter was not installed");
+    expect(printed()).toContain("Later: `bridge agent install claude`");
+    // The sign-in ran with its folder in bridge's, after the adapter, and left a login made by bridge (not a copy).
+    expect(h.spawned.map((s) => [s.command, ...s.args])).toEqual([["claude", "auth", "login"]]);
+    expect(h.spawned[0]!.env.CLAUDE_CONFIG_DIR).toBe(agentDirOf(h.deps, "claude"));
+    expect(await readFile(agentLoginFileOf(h.deps, "claude"), "utf8")).toContain("bridge-own");
+    expect(JSON.parse(await readFile(path.join(agentDirOf(h.deps, "claude"), "bridge-login.json"), "utf8"))).toMatchObject({ source: "login" });
+    // The agents' paths were listed once, in the grouped list; neither step repeats them.
+    expect(printed().split(`  ${agentDirOf(h.deps, "claude")}\n`).length - 1).toBe(1);
+    expect(printed().split(`  ${path.join(h.deps.dataDir, "bridge", "adapters", "claude")}`).length - 1).toBe(1);
+    expect(printed()).not.toContain("This runs `claude auth login`");
+    expect(printed()).not.toContain("These paths will be written");
+    // No agent can run (no adapter): the last line says what is missing, not "Ready".
+    expect(printed()).toContain(`${PAIRED_NO_AGENT} (claude: run \`bridge agent install claude\` (about 300 MB);`);
+    expect(printed()).not.toContain("Ready:");
+  });
+
+  it("an agent on PATH with the adapter installed and no login: setup signs it in for bridge and ends Ready", async () => {
+    const w = await world({ adapters: agentAdapters({ claude: true }) });
+    await onPath("claude");
+    loginLands();
     expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
-    // --yes answered install, connect and the service question; the two login questions and the words were asked.
-    expect(w.asked.map((a) => a.question)).toEqual([COPY_QUESTION, SIGN_IN_QUESTION, "Same words?"]);
-    // Copying is the default, the separate sign-in the alternative.
-    expect(w.asked.find((a) => a.question === COPY_QUESTION)!.default).toBe("yes");
-    expect(w.asked.find((a) => a.question === SIGN_IN_QUESTION)!.default).toBe("yes");
-    expect(printed()).toContain(agentLoginFileOf(h.deps, "claude"));
-    expect(printed()).toContain("bridge agent login claude");
-    expect(await exists(agentLoginFileOf(h.deps, "claude"))).toBe(false);
-    expect(h.spawned).toEqual([]);
-    // Setup still reaches the end.
+    // --yes answered the one question; the sign-in itself is the agent's own flow in this terminal.
+    expect(w.asked).toEqual([]);
+    expect(h.commands.some((c) => c[0] === "npm" && c.join(" ").includes("claude-agent-acp"))).toBe(false);
+    expect(h.spawned).toHaveLength(1);
+    expect(await exists(agentLoginFileOf(h.deps, "claude"))).toBe(true);
     expect(printed()).toContain("Ready: Demo App can use your coding agent");
   });
 
-  it("a yes to the copy puts the login in bridge's folder and skips the sign-in question", async () => {
+  it("a sign-in that fails is reported with the command and setup goes on", async () => {
     const w = await world({ adapters: agentAdapters({ claude: true }) });
-    await claudeSignedIn();
-    expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
-    const questions = w.asked.map((a) => a.question);
-    expect(questions).toEqual([
-      `Install bridge ${CLI_VERSION} for this user?`,
-      `Connect this machine to Demo App at ${w.server.url}?`,
-      COPY_QUESTION,
-      SERVICE_AND_HANDLER,
-      "Same words?",
-    ]);
-    expect(await exists(agentLoginFileOf(h.deps, "claude"))).toBe(true);
-    expect(h.spawned).toEqual([]);
+    await onPath("claude");
+    h.spawnResult.exitCode = 1;
+    expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
+    expect(printed()).toContain("No claude login for bridge yet. Later: `bridge agent login claude --login`.");
+    expect(printed()).toContain(`${PAIRED_NO_AGENT} (claude: run \`bridge agent login claude --login\``);
   });
 
-  it("asks nothing for an agent whose adapter is missing or whose login is already in bridge's folder", async () => {
+  it("asks and runs nothing for an agent whose adapter and login are in place", async () => {
     const w = await world({ adapters: agentAdapters({ claude: true, codex: false }) });
+    await onPath("claude");
     await mkdir(agentDirOf(h.deps, "claude"), { recursive: true });
     await writeFile(agentLoginFileOf(h.deps, "claude"), JSON.stringify({ claudeAiOauth: { accessToken: "c1" } }));
     expect(await runCli(["setup", w.server.url], h.deps)).toBe(0);
-    expect(w.asked.map((a) => a.question).some((q) => q.includes("login") || q.startsWith("Sign in"))).toBe(false);
-    expect(printed()).not.toContain("no login in bridge's own folder");
+    expect(w.asked.map((a) => a.question)).toEqual([ONE(w.server.url)]);
+    expect(h.spawned).toEqual([]);
+    expect(h.commands.some((c) => c[0] === "npm" && c.join(" ").includes("acp"))).toBe(false);
+    expect(printed()).toContain("Ready: Demo App can use your coding agent");
   });
 
-  it("with no codex adapter and no claude one, setup says so with the exact install commands and sizes, and asks no login", async () => {
+  it("with no agent on PATH, setup names each with the commands that set it up and asks nothing for agents", async () => {
     const w = await world({ adapters: agentAdapters({ claude: false, codex: false }) });
     expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
     const text = printed();
-    expect(text).toContain("No agent is ready on this machine (claude: adapter not installed, run `bridge agent install claude` (about 300 MB); codex: adapter not installed, run `bridge agent install codex` (about 450 MB)).");
-    expect(w.asked.map((a) => a.question).some((q) => q.includes("login") || q.startsWith("Sign in"))).toBe(false);
+    expect(text).toContain("Not set up here: claude: not found on PATH; once it is installed, run `bridge agent install claude` (about 300 MB) and `bridge agent login claude --login`; codex: not found on PATH");
+    expect(h.spawned).toEqual([]);
+    expect(text).toContain(PAIRED_NO_AGENT);
   });
 
   it("with no usable keychain setup refuses before any question or write, with the BRIDGE_CREDENTIAL_STORE hint", async () => {
@@ -539,17 +647,20 @@ describe("bridge setup agent logins", () => {
     expect(printed()).toContain(`  ${h.root}/creds\n`);
   });
 
-  it("--plan lists the agents folder among the paths, and writes nothing", async () => {
-    const w = await world({ adapters: agentAdapters({ claude: true }) });
+  it("--plan lists the adapter and agent folders among the paths, and writes nothing", async () => {
+    const w = await world({ adapters: agentAdapters({ claude: false }) });
+    await onPath("claude");
     const before = await tree(h.root);
     expect(await runCli(["setup", w.server.url, "--plan"], h.deps)).toBe(0);
     expect(await tree(h.root)).toEqual(before);
-    expect(printed()).toContain("agent_login:");
-    expect(printed()).toContain(path.join(h.deps.configDir, "bridge", "agents"));
+    expect(printed()).toContain("agents: needed");
+    expect(printed()).toContain(path.join(h.deps.dataDir, "bridge", "adapters", "claude"));
+    expect(printed()).toContain(agentDirOf(h.deps, "claude"));
   });
 
-  it("under --json emits agent_login_required, asks nothing, runs nothing, and still ends ready", async () => {
-    const w = await world({ isTTY: false, adapters: agentAdapters({ claude: true }) });
+  it("under --json --yes the adapter still installs, the sign-in is reported as agent_login_required, and nothing is spawned", async () => {
+    const w = await world({ isTTY: false, adapters: agentAdapters({ claude: false }) });
+    await onPath("claude");
     await claudeSignedIn();
     w.waitForWindow = true;
     const done = runCli(["setup", w.server.url, "--yes", "--json"], h.deps);
@@ -561,9 +672,10 @@ describe("bridge setup agent logins", () => {
     expect(await done).toBe(0);
     const events = jsonLines();
     const names = events.map((e) => e.event);
+    expect(h.commands.some((c) => c[0] === "npm" && c.at(-1)!.startsWith("@agentclientprotocol/claude-agent-acp@"))).toBe(true);
     expect(names.indexOf("agent_login_required")).toBeGreaterThan(names.indexOf("connected"));
     expect(names.indexOf("agent_login_required")).toBeLessThan(names.indexOf("service"));
-    expect(events[names.indexOf("agent_login_required")]).toEqual({ event: "agent_login_required", agents: ["claude"], command: "bridge agent login <agent> --copy|--login" });
+    expect(events[names.indexOf("agent_login_required")]).toEqual({ event: "agent_login_required", agents: ["claude"], command: "bridge agent login <agent> --login" });
     expect(names.at(-1)).toBe("ready");
     expect(w.asked).toEqual([]);
     expect(h.spawned).toEqual([]);
@@ -591,68 +703,36 @@ describe("bridge setup --plan", () => {
     expect(text).toContain("Nothing was written");
   });
 
-  it("never says the agent logins are in place when no agent can run", async () => {
+  it("never says an agent is ready when none can run, and names each with its commands", async () => {
     const w = await world({ adapters: agentAdapters({ claude: false, codex: false }) });
     // A login file left in bridge's folder does not make an agent ready when its adapter is nowhere.
     await mkdir(agentDirOf(h.deps, "claude"), { recursive: true });
     await writeFile(agentLoginFileOf(h.deps, "claude"), JSON.stringify({ claudeAiOauth: { accessToken: "c1" } }));
     expect(await runCli(["setup", w.server.url, "--plan"], h.deps)).toBe(0);
-    const line = printed().split("\n").find((l) => l.startsWith("agent_login:"))!;
-    expect(line).not.toContain("present");
-    expect(line).not.toContain("in place");
+    const line = printed().split("\n").find((l) => l.startsWith("agents:"))!;
     expect(line).toContain("no_agent");
-    expect(line).toContain("no agent is ready");
-    expect(line).toContain("bridge agent install claude");
-    // Codex is named the same way, with its size, so a codex-only person is told the next step too.
-    expect(line).toContain("claude: adapter not installed, run `bridge agent install claude` (about 300 MB)");
-    expect(line).toContain("codex: adapter not installed, run `bridge agent install codex` (about 450 MB)");
+    expect(line).not.toContain("ready;");
+    expect(line).toContain("claude: not found on PATH; once it is installed, run `bridge agent install claude` (about 300 MB)");
+    expect(line).toContain("codex: not found on PATH; once it is installed, run `bridge agent install codex` (about 450 MB) and `bridge agent login codex --login`");
 
     h.out.length = 0;
     expect(await runCli(["setup", w.server.url, "--plan", "--json"], h.deps)).toBe(0);
-    const step = (jsonLines()[0]!.steps as { id: string; state: string; paths: string[]; note?: string }[]).find((x) => x.id === "agent_login")!;
+    const step = (jsonLines()[0]!.steps as { id: string; state: string; paths: string[]; note?: string }[]).find((x) => x.id === "agents")!;
     expect(step.state).toBe("no_agent");
     expect(step.paths).toEqual([]);
-    expect(step.note).toContain("no agent is ready");
-    expect(step.note).toContain("bridge agent install claude");
+    expect(step.note).toContain("bridge agent install codex");
   });
 
-  it("names the codex install when only claude can run, and says nothing of codex once it can", async () => {
-    const w = await world({ adapters: agentAdapters({ claude: true, codex: false }) });
-    expect(await runCli(["setup", w.server.url, "--plan"], h.deps)).toBe(0);
-    const line = printed().split("\n").find((l) => l.startsWith("agent_login:"))!;
-    expect(line).toContain("no login in bridge's folder for claude");
-    expect(line).toContain("codex: adapter not installed, run `bridge agent install codex` (about 450 MB)");
-    expect(line).not.toContain("bridge agent install claude");
-  });
-
-  it("a codex-only person with no adapter is told to run bridge agent install codex, in the plan and in --json", async () => {
-    const w = await world({ adapters: agentAdapters({ claude: false, codex: false }) });
-    h.out.length = 0;
-    expect(await runCli(["setup", w.server.url, "--plan", "--json"], h.deps)).toBe(0);
-    const step = (jsonLines()[0]!.steps as { id: string; state: string; note?: string }[]).find((x) => x.id === "agent_login")!;
-    expect(step.state).toBe("no_agent");
-    expect(step.note).toContain("`bridge agent install codex` (about 450 MB)");
-  });
-
-  it("names the agent with no login and the claude install when only codex can run", async () => {
-    const w = await world({ adapters: agentAdapters({ claude: false, codex: true }) });
-    expect(await runCli(["setup", w.server.url, "--plan"], h.deps)).toBe(0);
-    const line = printed().split("\n").find((l) => l.startsWith("agent_login:"))!;
-    expect(line).toContain("no login in bridge's folder for codex");
-    expect(line).toContain("bridge agent install claude");
-  });
-
-  it("says the login is in place for an agent that can run and has one", async () => {
+  it("says an agent is ready when its adapter and bridge's login are in place", async () => {
     const w = await world({ adapters: agentAdapters({ claude: true, codex: false }) });
     await mkdir(agentDirOf(h.deps, "claude"), { recursive: true });
     await writeFile(agentLoginFileOf(h.deps, "claude"), JSON.stringify({ claudeAiOauth: { accessToken: "c1" } }));
     expect(await runCli(["setup", w.server.url, "--plan"], h.deps)).toBe(0);
-    const line = printed().split("\n").find((l) => l.startsWith("agent_login:"))!;
-    expect(line).toContain("agent_login: present");
-    expect(line).toContain("in place for claude");
+    const line = printed().split("\n").find((l) => l.startsWith("agents:"))!;
+    expect(line).toContain("agents: ready");
+    expect(line).toContain("claude: ready");
     expect(line).not.toContain("bridge agent install claude");
   });
-
   it("--plan --json prints one plan event and nothing else on stdout", async () => {
     const w = await world({ isTTY: false });
     expect(await runCli(["setup", w.server.url, "--plan", "--json"], h.deps)).toBe(0);
@@ -660,7 +740,7 @@ describe("bridge setup --plan", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ event: "plan", app: { appId: "demo", origin: w.server.url } });
     const steps = events[0]!.steps as { id: string; paths: string[] }[];
-    expect(steps.map((s) => s.id)).toEqual(["install", "connect", "agent_login", "service", "handler", "enroll"]);
+    expect(steps.map((s) => s.id)).toEqual(["install", "connect", "agents", "service", "handler", "enroll"]);
     expect(steps.find((s) => s.id === "install")!.paths).toContain(launcherPathOf(h.deps));
   });
 });
@@ -692,28 +772,27 @@ describe("bridge setup without a terminal", () => {
     const events = jsonLines();
     expect(events.map((e) => e.event)).toEqual([
       "plan",
-      "need_approval", // install
-      "need_approval", // connect
+      "need_approval", // the one consent: every group
       "device_code",
       "connected",
-      "need_approval", // service install and the bridge:// handler: one consent
       "service",
       "enroll_code",
       "trust_request",
       "ready",
     ]);
-    expect(events[1]).toMatchObject({ what: `install bridge ${CLI_VERSION}`, paths: expect.arrayContaining([launcherPathOf(h.deps)]) });
-    expect(events[2]).toMatchObject({ what: expect.stringContaining("Demo App") });
-    expect(events[3]).toEqual({ event: "device_code", url: `${w.idp.url}/activate`, code: "WDJB-MJHT" });
-    expect(events[5]).toMatchObject({
-      what: "service install and the bridge:// handler",
-      paths: expect.arrayContaining([runnerPathsOf(h.deps).serviceFile, path.join(h.deps.configDir, "mimeapps.list")]),
-    });
-    expect(events[7]).toMatchObject({ code: "BCDFGHJK", url: `${w.server.url}/bridge/enroll#code=BCDFGHJK&runner=${app!.runnerId}` });
-    expect(events[8]).toMatchObject({ label: "Firefox", words, keyId: "kid-1" });
-    expect(String(events[8]!.instructions)).toMatch(/Ask the person/);
-    expect(String(events[8]!.instructions)).toMatch(/Never guess/);
-    expect(events[9]).toMatchObject({ status: "paired", keyId: "kid-1" });
+    const groups = events[1]!.groups as { id: string; what: string; paths: string[] }[];
+    expect(events[1]).toMatchObject({ what: `set up bridge for Demo App at ${w.server.url}` });
+    expect(groups.map((g) => g.id)).toEqual(["install", "connect", "service"]);
+    expect(groups[0]).toMatchObject({ what: `install bridge ${CLI_VERSION} for this user`, paths: expect.arrayContaining([launcherPathOf(h.deps)]) });
+    expect(groups[1]).toMatchObject({ what: expect.stringContaining("Demo App"), paths: expect.arrayContaining([appsFilePath(h.deps)]) });
+    expect(groups[2]!.paths).toEqual(expect.arrayContaining([runnerPathsOf(h.deps).serviceFile, path.join(h.deps.configDir, "mimeapps.list")]));
+    expect(events[1]!.paths).toEqual(groups.flatMap((g) => g.paths));
+    expect(events[2]).toEqual({ event: "device_code", url: `${w.idp.url}/activate`, code: "WDJB-MJHT" });
+    expect(events[5]).toMatchObject({ code: "BCDFGHJK", url: `${w.server.url}/bridge/enroll#code=BCDFGHJK&runner=${app!.runnerId}` });
+    expect(events[6]).toMatchObject({ label: "Firefox", words, keyId: "kid-1" });
+    expect(String(events[6]!.instructions)).toMatch(/Ask the person/);
+    expect(String(events[6]!.instructions)).toMatch(/Never guess/);
+    expect(events[7]).toMatchObject({ status: "paired", keyId: "kid-1" });
     expect(await readFile(path.join(h.deps.configDir, "mimeapps.list"), "utf8")).toContain("x-scheme-handler/bridge=bridge-url-handler.desktop");
     expect(w.asked).toEqual([]);
     // Text is on stderr, including the agent-facing instruction about the words.
@@ -731,8 +810,9 @@ describe("bridge setup without a terminal", () => {
     await until(() => jsonLines().some((e) => e.event === "trust_request"));
     expect(await runCli(["enroll", "deny", "demo"], aside())).toBe(0);
     expect(await done).toBe(1);
-    const approvals = jsonLines().filter((e) => e.event === "need_approval").map((e) => e.what);
-    expect(approvals).toEqual([`install bridge ${CLI_VERSION}`, expect.stringContaining("Demo App"), "service install and the bridge:// handler"]);
+    const approvals = jsonLines().filter((e) => e.event === "need_approval");
+    expect(approvals).toHaveLength(1);
+    expect((approvals[0]!.groups as { id: string }[]).map((g) => g.id)).toEqual(["install", "connect", "service"]);
     expect(await readFile(path.join(h.deps.configDir, "mimeapps.list"), "utf8")).toContain("x-scheme-handler/bridge=bridge-url-handler.desktop");
     expect(w.asked).toEqual([]);
   });
@@ -749,7 +829,7 @@ describe("bridge setup without a terminal", () => {
     await until(() => jsonLines().some((e) => e.event === "trust_request"));
     expect(await runCli(["enroll", "deny", "demo"], aside())).toBe(0);
     expect(await done).toBe(1);
-    expect(jsonLines().some((e) => e.event === "need_approval" && String(e.what).includes("bridge:// handler"))).toBe(false);
+    expect(jsonLines().some((e) => e.event === "need_approval" && JSON.stringify(e.groups).includes("bridge:// handler"))).toBe(false);
     expect(await exists(path.join(h.deps.configDir, "mimeapps.list"))).toBe(false);
     expect(h.err.join("")).toContain("The bridge:// handler was not registered");
     expect(h.err.join("")).toContain("register it later with `bridge protocol install`");
@@ -840,7 +920,7 @@ describe("bridge setup and a revoked machine", () => {
     expect(printed()).toContain("revoked");
     expect(printed()).not.toContain("Already connected");
     expect(h.commands).toContainEqual(["systemctl", "--user", "restart", runnerPathsOf(h.deps).serviceName]);
-    expect(printed()).toContain("Ready:");
+    expect(printed()).toContain("but no coding agent is ready on this machine");
 
     // Run again, with the old runner still reporting revoked (the restart did not happen): no third id.
     await writeRunnerStatus(h.deps, live({ demo: "revoked" }, "2026-10-21T00:00:00.000Z"));
@@ -891,7 +971,7 @@ describe("bridge setup and a revoked machine", () => {
       const [after] = await loadApps(h.deps);
       expect(after!.runnerId).not.toBe(before!.runnerId);
       expect(h.commands).toContainEqual(["systemctl", "--user", "restart", runnerPathsOf(h.deps).serviceName]);
-      expect(printed()).toContain("Ready:");
+      expect(printed()).toContain("but no coding agent is ready on this machine");
     },
   );
 
@@ -921,7 +1001,6 @@ describe("bridge setup and a revoked machine", () => {
     await writeRunnerStatus(h.deps, live({ demo: "online" }, app!.connectedAt));
     h.out.length = 0;
     h.commands.length = 0;
-    w.answer = () => false; // "pair another browser?" -> no
     expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
     expect(h.commands.filter((c) => c[0] === "systemctl")).toEqual([]);
     expect((await loadApps(h.deps))[0]!.runnerId).toBe(app!.runnerId);
@@ -943,8 +1022,7 @@ describe("bridge setup and a revoked machine", () => {
 
       h.out.length = 0;
       h.commands.length = 0;
-      w.answer = () => false; // "pair another browser?" -> no
-      expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
+        expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
       expect(h.commands.filter((c) => c[0] === "systemctl")).toEqual([]);
       expect(printed()).toContain("already running");
       expect(printed()).not.toContain("restarting it");
@@ -1012,14 +1090,15 @@ describe("bridge setup run again", () => {
     h.opened.length = 0;
     w.asked.length = 0;
     w.idp.requests.length = 0;
-    w.answer = () => false; // "pair another browser?" -> no
 
     expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
     expect(h.commands.filter((c) => c[0] === "npm")).toEqual([]);
     expect(h.commands.filter((c) => c[0] === "systemctl")).toEqual([]);
     expect(w.idp.requests).toEqual([]);
     expect(h.opened).toEqual([]);
-    expect(w.asked.map((a) => a.question)).toEqual(["1 browser(s) already trusted for Demo App. Pair another browser?"]);
+    // Nothing is left to consent to, and an already trusted browser asks nothing: `bridge enroll` pairs another.
+    expect(w.asked).toEqual([]);
+    expect(printed()).toContain("To pair another browser, run `bridge enroll demo --open`.");
     expect(printed()).toContain("already installed");
     expect(printed()).toContain("Already connected");
     expect(printed()).toContain("The background service is already installed");
@@ -1110,7 +1189,7 @@ describe("bridge setup run again", () => {
     w.asked.length = 0;
     expect(await runCli(["setup", w.server.url, "--yes"], h.deps)).toBe(0);
     expect(h.commands).toContainEqual(["systemctl", "--user", "start", runnerPathsOf(h.deps).serviceName]);
-    expect(w.asked.map((a) => a.question)).toEqual(["Same words?"]);
+    expect(w.asked).toEqual([]);
   });
 });
 
@@ -1293,7 +1372,7 @@ describe("bridge setup with the runner in this terminal", () => {
     const f = await foreground(true);
     const done = runCli(["setup", f.url, "--foreground", "--no-install", "--yes", "--no-open"], h.deps);
     await until(() => printed().includes("The runner stays in this terminal") || printed().includes("bridge setup:"), 15_000).catch(() => undefined);
-    expect(printed()).toContain("Ready: Demo App");
+    expect(printed()).toContain("Paired: Demo App");
     f.stop.abort();
     expect(await done).toBe(0);
     expect(f.trusted).toHaveLength(1);

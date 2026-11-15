@@ -137,7 +137,7 @@ What the runner writes, and where. `bridge doctor --paths` prints the full list 
   runs on a throwaway copy of it, and when the agent refreshed its token inside the session the
   runner **writes the refreshed token back to those two files**. There is no switch to turn that off.
   Bridge never writes `~/.claude`, `~/.codex`, `$CLAUDE_CONFIG_DIR` or `$CODEX_HOME`. It reads your own
-  login file (read only) only when setup or `bridge agent login` offers to copy it, or you pass `--copy`:
+  login file (read only) only when `bridge agent login` offers to copy it, or you pass `--copy`:
   first to check there is a login to copy, again after your yes. The runner never reads it while serving
   sessions. `bridge doctor` lists the two paths. Details:
   [Operate the runner](docs/guides/operate-the-runner.md#token-write-back).

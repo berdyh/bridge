@@ -172,7 +172,7 @@ const STALE_STATE_FILES = ["trust.json", "identity.json", "enroll.json", "identi
  * belongs to the earlier runner id (the identity is bound to it, and the trusted browsers trusted that
  * runner), and a connect that picks a new id must not inherit it.
  */
-async function staleStateOf(deps: CliDeps, appId: string): Promise<{ files: string[]; previousRunnerId?: string }> {
+export async function staleStateOf(deps: CliDeps, appId: string): Promise<{ files: string[]; previousRunnerId?: string }> {
   const dir = appPathsOf(deps, appId).configDir;
   const files: string[] = [];
   for (const name of STALE_STATE_FILES) {
@@ -214,6 +214,8 @@ export interface ConnectOptions {
   label?: string;
   /** A discovery the caller already read and showed (`setup`): connect exactly this document, do not fetch again. */
   discovered?: Discovered;
+  /** The caller listed these paths in its own consent and got a yes (`setup`): no question and no `need_approval` event. */
+  consented?: boolean;
 }
 
 /** `replacedRevoked`: the stored runner id was revoked and this connect replaced it with a new one. */
@@ -292,13 +294,15 @@ export async function connectApp(url: URL, deps: CliDeps, options: ConnectOption
   if (unresolvable !== undefined) {
     return fail({ ok: false, code: "unsafe_layout", message: `${unresolvable.path} cannot be resolved (${unresolvable.error}); nothing was changed` });
   }
-  say(`App:     ${name} (${appId})\nOrigin:  ${discovery.origin}\nSign-in: ${discovery.auth.issuer}\n`);
+  // A caller that consented (setup) already listed the app, its origin and these paths: they are not printed again.
+  const quiet = options.consented === true;
+  if (!quiet) say(`App:     ${name} (${appId})\nOrigin:  ${discovery.origin}\nSign-in: ${discovery.auth.issuer}\n`);
   if (revoked) say(`The runner reports this machine as revoked by ${name}. It will be connected again as a new machine (a new runner id).\n`);
   // The path list is printed before the question, with or without --yes, as every consent does.
   const where = credentialStoreWhere(deps);
   const credentialDir = credentialDirOf(deps);
   const parentNote = "its parent is created only when missing and never changed";
-  say(
+  if (!quiet) say(
     `These paths will be written:\n` +
       `  ${describePath(plan.files[0]!)}  (the machine-wide list of connected apps: id and origin)\n` +
       `  ${describePath(plan.files[1]!)}  (the app record; the sign-in token goes to ${where})\n` +
@@ -307,7 +311,7 @@ export async function connectApp(url: URL, deps: CliDeps, options: ConnectOption
       `  ${describePath(plan.dirs[2]!)}  (dir: the work folder and session sandboxes, created when the runner first needs it; ${parentNote})\n` +
       (credentialDir !== undefined ? `  ${printable(credentialDir)}  (dir: the credential files, unencrypted: the sign-in token and the identity's wrapping key; created 0700 when missing, BRIDGE_CREDENTIAL_STORE)\n` : ""),
   );
-  if (plan.stale.length > 0) {
+  if (plan.stale.length > 0 && !quiet) {
     say(
       `This app was connected before and its folder still holds that connection's state. It belonged to another runner id, so these will be DELETED` +
         `${plan.previousRunnerId !== undefined ? ` (and the identity's wrapping key in ${where})` : ""}:\n` +
@@ -315,13 +319,13 @@ export async function connectApp(url: URL, deps: CliDeps, options: ConnectOption
         (plan.previousRunnerId === undefined ? `The identity's wrapping key in ${where} is not removed: the earlier record is unreadable, so its runner id is unknown; delete it by hand.\n` : ""),
     );
   }
-  emit({
+  if (options.consented !== true) emit({
     event: "need_approval",
     what: `connect to ${name} at ${discovery.origin}`,
     paths: [appsFilePath(deps), paths.appFile, paths.configDir, paths.dataDir, paths.stateDir, ...(credentialDir !== undefined ? [credentialDir] : [])],
     ...(plan.stale.length > 0 ? { deletes: plan.stale.map((s) => s.canonical) } : {}),
   });
-  if (!options.yes && !(await deps.confirm(`Connect this machine to ${name} at ${discovery.origin}?`))) {
+  if (!options.yes && options.consented !== true && !(await deps.confirm(`Connect this machine to ${name} at ${discovery.origin}?`))) {
     return fail({ ok: false, code: "cancelled", message: "cancelled" });
   }
 

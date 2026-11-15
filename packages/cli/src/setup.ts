@@ -4,12 +4,12 @@ import { formatEnrollFragment, wordsOf } from "@berdyh/bridge-protocol";
 import { loadTokens } from "@berdyh/bridge-pairing";
 import { EnrollError, type EnrollPrompt, type LinkStatus } from "@berdyh/bridge-runner";
 
-import { type AgentName, agentLoginFileOf, agentNameOfAdapter, agentsDirOf, offerAgentLogin } from "./agent.js";
+import { AGENT_NAMES, type AgentName, agentDirOf, agentLoginFileOf, agentLoginIsPresent, agentNameOfAdapter, agentOnPath, loginInBridgeFolder } from "./agent.js";
 import { parse } from "./args.js";
 import { type HostedAppRecord, appsFilePath, isLocalApp, loadApps, printable, tokenKey } from "./config.js";
-import { appUrlOf, connectApp, discoverApp, linkRevoked, startedBeforeRecord, voiceOf } from "./connect.js";
+import { appUrlOf, connectApp, discoverApp, linkRevoked, staleStateOf, startedBeforeRecord, voiceOf } from "./connect.js";
 import { type CliDeps, UsageError, credentialDirOf, credentialStoreWhere, credentialsOf, e2eeOf, errorMessage, isTTYOf, keychainHint, keychainUsability, openUrlOf, platformOf, runnerOf, setupConfigOf } from "./deps.js";
-import { ADAPTER_KINDS } from "./adapters.js";
+import { ADAPTER_KINDS, adapterInstallPlan, installAdapter } from "./adapters.js";
 import { adapterReports, launchdUid, protocolHandlerReport } from "./doctor.js";
 import { LegacyLayoutError, assertNoLegacyLayout } from "./legacy.js";
 import { WORDS_RULE, confirmFromWindow, e2eeAppOf } from "./enroll.js";
@@ -17,7 +17,6 @@ import {
   type ProtocolInstallPlan,
   installProtocolHandler,
   protocolHandlerPaths,
-  protocolInstallLines,
   protocolInstallPlan,
   terminalStartRunner,
 } from "./protocol-handler.js";
@@ -131,21 +130,55 @@ function enrollLinkOf(app: HostedAppRecord, code: string): string | undefined {
   }
 }
 
+/** What setup knows of one agent before it asks: its own command on PATH, bridge's adapter for it, bridge's own login. */
+interface AgentLook {
+  agent: AgentName;
+  onPath: boolean;
+  adapter: boolean;
+  login: boolean;
+}
+
+/** One purpose in setup's one consent: what it does and the paths it writes (and deletes). */
+interface ConsentGroup {
+  id: "install" | "connect" | "agents" | "service";
+  what: string;
+  paths: string[];
+  deletes?: string[];
+}
+
+/** What is missing for an agent that cannot run yet, as the commands that add it. */
+function agentGap(look: AgentLook): string {
+  const steps = [
+    ...(look.adapter ? [] : [`\`${ADAPTER_KINDS[look.agent].command}\` (${ADAPTER_KINDS[look.agent].size})`]),
+    ...(look.login ? [] : [`\`bridge agent login ${look.agent} --login\``]),
+  ];
+  return look.onPath ? `${look.agent}: run ${steps.join(" and ")}` : `${look.agent}: not found on PATH; once it is installed, run ${steps.join(" and ")}`;
+}
+
 /**
  * `bridge setup <app-url> [--service | --foreground] [--no-install] [--no-open] [--yes] [--json] [--plan]`.
  *
- * One terminal, no typed code: install (listed paths), connect, one question for the background
- * service and the `bridge://` handler together (the handler only where it exists; `--foreground`
- * asks neither), wait for the runner, enroll through the app's enroll page, four words.
- * `bridge service install` and `bridge protocol install` remain the way to add just one.
+ * One terminal, one question: setup looks first (reads only), prints one path
+ * list grouped by purpose (install, connect, agents, background service and `bridge://` handler),
+ * asks `Set up bridge for <app> at <origin>?` once, then runs each step as `--yes` would, each step
+ * rechecking its own plan before it writes. Steps already done are left out; with nothing left to
+ * consent to there is no question. Then it waits for the runner and enrolls the browser.
  *
  * Trust rules, in the order a reviewer would walk them:
- *  - every consent prints its exact path list first, with or without `--yes`;
- *  - `--yes` answers the install, connect and service-and-handler questions and nothing else: the
- *    four-words step is `deps.confirm` on a terminal, and `bridge enroll approve --words` from
- *    another process otherwise (the agent must ask the person for the words);
+ *  - the grouped path list is printed before the question, with or without `--yes`; `--json` emits it
+ *    as one `need_approval` event with the groups;
+ *  - a "no" writes nothing (`cancelled`); `--from-link` (passed by the `bridge://setup` handler, so a
+ *    web page started this run) makes the question default to no;
  *  - without a terminal (or with `--json`) and without `--yes`, nothing is asked and nothing is
  *    written: setup stops before the first write;
+ *  - agents: for claude and codex whose own command is on PATH, the consent covers bridge's adapter
+ *    and a separate sign-in into bridge's own folder (never a copy of the person's login); the sign-in
+ *    needs a terminal, else it is reported as `agent_login_required`;
+ *  - the browser: on an interactive run, the first trust request after setup itself opened the enroll
+ *    link is trusted without the four words (they are printed with the revoke command), and the code
+ *    and link are not printed unless the open fails. Every other case asks the words: `deps.confirm`
+ *    on a terminal, `bridge enroll approve --words` from another process otherwise (the agent must
+ *    ask the person for the words). `--yes` never answers them;
  *  - the origin printed is the origin connected (one discovery document), and the enroll link is
  *    `<that origin><enrollPage>#code=...` where `enrollPage` is a path checked on the same origin;
  *  - nothing here takes a value from a `bridge://` link beyond the origin `handle-url` passes.
@@ -159,6 +192,8 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
     yes: { type: "boolean" },
     json: { type: "boolean" },
     plan: { type: "boolean" },
+    // Hidden: what the bridge:// handler passes.
+    "from-link": { type: "boolean" },
   });
   if (positionals.length !== 1) throw new UsageError(USAGE);
   if (values.service && values.foreground) throw new UsageError("--service and --foreground exclude each other");
@@ -219,6 +254,8 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
     existing.origin === discovery.origin &&
     existing.relayUrl === discovery.relayUrl &&
     JSON.stringify(existing.auth) === JSON.stringify(discovery.auth);
+  // A connect with a new runner id deletes what an earlier connection of this app left in its folder: part of the consent.
+  const staleFiles = !sameApp && (existing === undefined || revokedLink) ? (await staleStateOf(deps, appId)).files : [];
   const serviceExists = await serviceInstalled(deps);
   const servicePaths = planPaths(servicePlanOf(deps));
   const handler = await protocolHandlerReport(deps);
@@ -226,34 +263,33 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
   const handlerPaths = handler.supported ? protocolHandlerPaths(deps).map((e) => e.path) : [];
   const appPaths = appPathsOf(deps, appId);
   const workDir = appPaths.workDir;
-  // Agents whose adapter is installed (its command resolves) but that have no login in bridge's folder.
-  // Not `availability()`: that checks the login file too, so it reads false exactly when this step is needed.
-  const loginNeeded: AgentName[] = [];
-  // Agents setup can run (command resolves) with a login in bridge's folder: the only ones "in place" may name.
-  const loginReady: AgentName[] = [];
-  // An agent with no usable command here (its adapter is not installed) is in neither list: no login is asked for it.
-  for (const report of await adapterReports(deps)) {
-    const agent = agentNameOfAdapter(report.id);
-    if (!agent) continue;
-    if (!report.command) continue;
-    if (report.login?.present === false) loginNeeded.push(agent);
-    else loginReady.push(agent);
+
+  // Agents: claude and codex whose own command is on PATH get bridge's adapter and a separate sign-in into bridge's
+  // folder when they lack them. Never a copy of the person's login: a copy shares the grant and can sign them out.
+  const reports = await adapterReports(deps);
+  const looks: AgentLook[] = [];
+  for (const agent of AGENT_NAMES) {
+    const report = reports.find((r) => agentNameOfAdapter(r.id) === agent);
+    looks.push({
+      agent,
+      onPath: agentOnPath(deps, agent),
+      adapter: report?.command !== undefined,
+      login: report?.login?.present ?? (await agentLoginIsPresent(deps, agent).catch(() => false)),
+    });
   }
-  // An agent whose adapter is not installed is named with the exact command that installs it and what it costs: a
-  // codex-only person is told the next step too, not left with no agent. (The login is asked only after it.)
-  const installHints = (["claude", "codex"] as const)
-    .filter((a) => !loginReady.includes(a) && !loginNeeded.includes(a))
-    .map((a) => `${a}: adapter not installed, run \`${ADAPTER_KINDS[a].command}\` (${ADAPTER_KINDS[a].size})`);
-  const installHint = installHints.length > 0 ? installHints.join("; ") : undefined;
-  const noAgentReady = loginNeeded.length === 0 && loginReady.length === 0;
-  const loginNote = (): string => {
-    const parts: string[] = [];
-    if (loginNeeded.length > 0) parts.push(`no login in bridge's folder for ${loginNeeded.join(", ")}: copy yours once or sign in (never ~/.claude or ~/.codex)`);
-    else if (noAgentReady) parts.push("no agent is ready: bridge has no agent it can run here");
-    else parts.push(`bridge's own login is in place for ${loginReady.join(", ")}`);
-    if (installHint) parts.push(installHint);
-    return parts.join("; ");
-  };
+  const adapterFor = looks.filter((l) => l.onPath && !l.adapter).map((l) => l.agent);
+  const loginFor = looks.filter((l) => l.onPath && !l.login).map((l) => l.agent);
+  const usableBefore = looks.filter((l) => l.adapter && l.login).map((l) => l.agent);
+  const agentNotes = looks.map((l) => (l.adapter && l.login ? `${l.agent}: ready` : agentGap(l)));
+
+  // The service and the handler: offered when the launcher they run will be there; `--foreground` offers neither.
+  const launcherWillBeReady = !noInstall || (launcherBefore.kind === "ours" && !launcherBefore.dangling);
+  const handlerOfferable = platformOf(deps) === "linux" && launcherWillBeReady && handler.supported && !handlerRegistered;
+  const serviceOffered = !serviceExists && mode !== "foreground" && launcherWillBeReady;
+  // With the service already there only the handler is left; with setup.service "ask", --yes does not answer that offer.
+  const handlerOnly = serviceExists && mode !== "foreground" && handlerOfferable && !(setting === "ask" && yes);
+  const handlerOffered = (serviceOffered && handlerOfferable) || handlerOnly;
+  const askService = setting === "ask" && mode === undefined && (serviceOffered || handlerOnly);
 
   const steps: PlanStep[] = [
     { id: "install", state: installState, paths: installState === "needed" ? installPlan.paths : [] },
@@ -264,23 +300,22 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
       note: `${revokedLink ? "the runner reports this machine as revoked: it connects again with a new runner id and its old trust list and identity are deleted; " : ""}the sign-in token goes to ${credentialStoreWhere(deps)}; the three bridge/ dirs are the app's own, their parents are created only when missing`,
     },
     {
-      id: "agent_login",
-      state: loginNeeded.length > 0 ? (interactive ? "asked" : "needed") : noAgentReady ? "no_agent" : "present",
-      paths: loginNeeded.length === 0 ? [] : [agentsDirOf(deps)],
-      note: loginNote(),
+      id: "agents",
+      state: adapterFor.length + loginFor.length > 0 ? "needed" : usableBefore.length > 0 ? "ready" : "no_agent",
+      paths: [...adapterFor.map((a) => adapterInstallPlan(deps, a).dir), ...loginFor.map((a) => agentDirOf(deps, a))],
+      note: agentNotes.join("; "),
     },
     {
       id: "service",
-      state: serviceExists ? "installed" : mode === "foreground" ? "foreground" : mode === "service" ? "service" : "asked",
-      paths: serviceExists || mode === "foreground" ? [] : servicePaths,
+      state: serviceExists ? "installed" : mode === "foreground" ? "foreground" : mode === "service" ? "service" : "offered",
+      paths: serviceOffered ? servicePaths : [],
     },
     {
       id: "handler",
       state: !handler.supported ? "unsupported" : handlerRegistered ? "registered" : mode === "foreground" ? "foreground" : "offered",
-      paths: handler.supported && !handlerRegistered && mode !== "foreground" ? handlerPaths : [],
-      ...(handler.supported && !handlerRegistered && !serviceExists && mode !== "foreground" && { note: "asked together with the service" }),
+      paths: handlerOffered ? handlerPaths : [],
     },
-    { id: "enroll", state: "waits for the four words", paths: [workDir], note: "agent sessions start in this folder" },
+    { id: "enroll", state: "waits for the browser", paths: [workDir], note: "agent sessions start in this folder" },
   ];
   emit({ event: "plan", app: { appId, name: appName, origin: discovery.origin }, steps });
   if (values.plan) {
@@ -300,18 +335,60 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
       "setup asks before it writes. Run it in a terminal, or pass --yes once the person agreed to the paths listed by `--plan`.",
     );
   }
-  // Mirror the service question's own condition: it is asked when a launcher will be there (installed now, or already ours).
-  const launcherWillBeReady = !noInstall || (launcherBefore.kind === "ours" && !launcherBefore.dangling);
-  if (setting === "ask" && mode === undefined && !serviceExists && launcherWillBeReady && !interactive) {
-    return stop("service_choice_required", "the setting setup.service is \"ask\": choose with --service or --foreground (or run in a terminal).");
+  // setup.service "ask": --yes does not choose for the person, and nobody can be asked without a terminal.
+  if (askService && serviceOffered && (yes || !interactive)) {
+    return stop("service_choice_required", "the setting setup.service is \"ask\": choose with --service or --foreground (or run in a terminal without --yes).");
+  }
+  if (mode === "service" && !launcherWillBeReady) {
+    return stop("no_launcher", `--service needs the installed launcher at ${installPlan.launcherLink} (run without --no-install)`);
+  }
+
+  // --- the one consent ------------------------------------------------------------------
+  const groups: ConsentGroup[] = [];
+  if (installState === "needed") groups.push({ id: "install", what: `install bridge ${installPlan.version} for this user`, paths: installPlan.paths });
+  if (!sameApp) {
+    const connect = steps.find((s) => s.id === "connect")!;
+    groups.push({
+      id: "connect",
+      what: `connect this machine to ${appName} at ${discovery.origin} (you sign in in the browser; the token goes to ${credentialStoreWhere(deps)})`,
+      paths: connect.paths,
+      ...(staleFiles.length > 0 ? { deletes: staleFiles } : {}),
+    });
+  }
+  if (adapterFor.length + loginFor.length > 0) {
+    const parts = [
+      ...adapterFor.map((a) => `bridge's ${a} adapter (${ADAPTER_KINDS[a].size} from the npm registry)`),
+      ...loginFor.map((a) => `a separate ${a} sign-in for bridge, kept in bridge's folder (your own ~/.${a} is not touched)`),
+    ];
+    groups.push({ id: "agents", what: `agents: ${parts.join("; ")}`, paths: steps.find((s) => s.id === "agents")!.paths });
+  }
+  if (serviceOffered || handlerOnly) {
+    const what = serviceOffered
+      ? handlerOffered
+        ? "run the runner as a background service, and register the bridge:// handler the page's Start button uses"
+        : "run the runner as a background service"
+      : "register the bridge:// handler the page's Start button uses";
+    groups.push({ id: "service", what, paths: [...(serviceOffered ? servicePaths : []), ...(handlerOffered ? handlerPaths : [])] });
+  }
+  const unready = looks.filter((l) => !l.onPath && !(l.adapter && l.login));
+  if (groups.length > 0) {
+    emit({ event: "need_approval", what: `set up bridge for ${appName} at ${discovery.origin}`, groups, paths: groups.flatMap((g) => g.paths) });
+    say(
+      `To set up bridge for ${appName}, these paths will be written:\n` +
+        groups
+          .map((g) => `  ${g.what}:\n${g.paths.map((p) => `    ${p}\n`).join("")}${(g.deletes ?? []).map((p) => `    ${p}  (DELETED: left by an earlier connection of this app)\n`).join("")}`)
+          .join(""),
+    );
+    if (unready.length > 0) say(`Not set up here: ${unready.map(agentGap).join("; ")}.\n`);
+    const question = `Set up bridge for ${appName} at ${discovery.origin}?`;
+    const answer = yes || (await deps.confirm(question, { default: values["from-link"] ? "no" : askService ? "none" : "yes" }));
+    if (!answer) return stop("cancelled", "cancelled; nothing was written");
   }
 
   // --- install ----------------------------------------------------------------------------
   if (!noInstall) {
-    if (installState === "needed") emit({ event: "need_approval", what: `install bridge ${installPlan.version}`, paths: installPlan.paths });
     try {
-      const installed = await selfInstall(textDeps, { yes });
-      if (installed.outcome === "cancelled") return stop("cancelled", "cancelled");
+      await selfInstall(textDeps, { consented: true });
     } catch (error) {
       return stop("install_failed", errorMessage(error));
     }
@@ -332,70 +409,70 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
     const { enrollPage: _stored, ...rest } = existing!;
     app = { ...rest, name: appName, ...(discovery.enrollPage !== undefined ? { enrollPage: discovery.enrollPage } : {}) };
   } else {
-    const connected = await connectApp(url, deps, { yes, open: !values["no-open"], json, label: "bridge setup", discovered: found });
+    const connected = await connectApp(url, deps, { yes: true, consented: true, open: !values["no-open"], json, label: "bridge setup", discovered: found });
     if (!connected.ok) return 1;
     app = connected.app;
   }
 
-  // --- agent logins: bridge keeps its own, never in ~/.claude or ~/.codex ------------------
-  // `--yes` does not answer these: copying a credential is the person's decision. Without a terminal
-  // (or under --json) setup only reports what is missing and goes on: the runner works without a
-  // login, `bridge doctor` says so.
-  if (noAgentReady) {
-    say(`No agent is ready on this machine${installHint ? ` (${installHint})` : ""}. Sessions cannot start until one is installed and has a login.\n`);
-  }
-  if (loginNeeded.length > 0) {
-    if (interactive) {
-      for (const agent of loginNeeded) {
-        say(`${agent}: no login in bridge's own folder (${agentLoginFileOf(deps, agent)}).\n`);
-        try {
-          await offerAgentLogin(deps, agent);
-        } catch (error) {
-          say(`No ${agent} login yet: ${errorMessage(error)}\n`);
-        }
-      }
-    } else {
-      emit({ event: "agent_login_required", agents: loginNeeded, command: "bridge agent login <agent> --copy|--login" });
-      say(`No agent login in bridge's own folder for ${loginNeeded.join(", ")}. Later: ${loginNeeded.map((a) => `\`bridge agent login ${a}\``).join(", ")} (--copy or --login without a terminal).\n`);
+  // --- agents: bridge's adapter and its own sign-in, never ~/.claude or ~/.codex --------------
+  // A failure is reported with the command that does it later; setup goes on (the runner works without an agent).
+  const done = { adapter: new Set<AgentName>(), login: new Set<AgentName>() };
+  for (const agent of adapterFor) {
+    try {
+      const installed = await installAdapter(textDeps, agent, { consented: true });
+      if (installed.outcome !== "cancelled") done.adapter.add(agent);
+    } catch (error) {
+      say(`The ${agent} adapter was not installed: ${errorMessage(error)}. Later: \`${ADAPTER_KINDS[agent].command}\`.\n`);
     }
   }
+  if (loginFor.length > 0 && interactive) {
+    for (const agent of loginFor) {
+      say(`${agent}: signing in for bridge (its login goes to ${agentLoginFileOf(deps, agent)}).\n`);
+      let outcome: string;
+      try {
+        outcome = await loginInBridgeFolder(textDeps, agent, { consented: true });
+      } catch (error) {
+        say(`${errorMessage(error)}\n`);
+        outcome = "failed";
+      }
+      if (outcome === "done") done.login.add(agent);
+      else say(`No ${agent} login for bridge yet. Later: \`bridge agent login ${agent} --login\`.\n`);
+    }
+  } else if (loginFor.length > 0) {
+    // The agent's sign-in is the person's, in a terminal: nothing here can run it.
+    emit({ event: "agent_login_required", agents: loginFor, command: "bridge agent login <agent> --login" });
+    say(`No agent login in bridge's own folder for ${loginFor.join(", ")}. Later, in a terminal: ${loginFor.map((a) => `\`bridge agent login ${a} --login\``).join(", ")}.\n`);
+  }
+  const usable = looks.filter((l) => (l.adapter || done.adapter.has(l.agent)) && (l.login || done.login.has(l.agent))).map((l) => l.agent);
+  const missing = looks
+    .filter((l) => !usable.includes(l.agent))
+    .map((l) => agentGap({ ...l, adapter: l.adapter || done.adapter.has(l.agent), login: l.login || done.login.has(l.agent) }));
+  /** The last line: "Ready" only when an agent can run; otherwise what is missing. */
+  const readyLine = (ok: string, paired: string): string =>
+    usable.length > 0 ? `Ready: ${ok}\n` : `${paired}, but no coding agent is ready on this machine (${missing.join("; ")}).\n`;
 
-  // --- the service and the bridge:// handler: one consent ----------------------------------
-  // The handler is offered where it exists (Linux) and the launcher it runs is installed;
-  // `--foreground` means neither the service nor the handler is asked about.
-  const handlerOffered = platformOf(deps) === "linux" && launcherReady && handler.supported && !handlerRegistered;
+  // --- the service and the bridge:// handler ----------------------------------------------
   const handlerLater = "The page's Start button needs it; register it later with `bridge protocol install`.";
   let useService = serviceExists;
-  if (mode === "foreground" && handlerOffered) {
+  if (mode === "foreground" && platformOf(deps) === "linux" && launcherReady && handler.supported && !handlerRegistered) {
     say(`Not registering the bridge:// handler (--foreground). ${handlerLater}\n`);
   }
   if (serviceExists) {
     say("The background service is already installed.\n");
     if (mode === "foreground") {
       say("--foreground is ignored while the background service is installed: the service runs the runner. To run it in a terminal instead, remove the service with `bridge service uninstall` and run setup again.\n");
-    } else if (handlerOffered) {
-      // Only the handler is left to offer: its own consent.
-      const askDefault = setting === "ask" ? "none" : "yes";
-      const answersYes = yes && askDefault === "yes";
-      if (answersYes || interactive) {
-        emit({ event: "need_approval", what: "register the bridge:// handler", paths: handlerPaths });
-        const asking: CliDeps = { ...textDeps, confirm: (question) => deps.confirm(`${question} (the page's Start button uses it)`, { default: askDefault }) };
-        try {
-          await installProtocolHandler(asking, { yes: answersYes });
-        } catch (error) {
-          say(`The bridge:// handler was not registered: ${errorMessage(error)}\n`);
-        }
-      } else {
-        // setup.service is "ask": --yes does not answer the offer, and nobody can be asked here.
-        say(`The bridge:// handler was not registered: with setup.service "ask", --yes does not answer that offer and nobody can be asked here. ${handlerLater}\n`);
+    } else if (handlerOnly && launcherReady) {
+      try {
+        await installProtocolHandler(textDeps, { consented: true });
+      } catch (error) {
+        say(`The bridge:// handler was not registered: ${errorMessage(error)}\n`);
       }
+    } else if (handlerOfferable) {
+      // setup.service is "ask": --yes does not answer the offer.
+      say(`The bridge:// handler was not registered: with setup.service "ask", --yes does not answer that offer. ${handlerLater}\n`);
     }
-  } else if (mode !== "foreground" && launcherReady) {
-    // `--service` is the choice, not the consent: the path list and the question still appear unless --yes.
-    const askDefault = mode === "service" ? "yes" : setting === "ask" ? "none" : "yes";
-    const answersYes = yes && askDefault === "yes";
-    // The handler's plan is bound now, listed with the service's paths, and executed only if it
-    // is unchanged after the answer (installProtocolHandler recomputes it once).
+  } else if (serviceOffered && launcherReady) {
+    // The handler's plan is bound now and executed only if it is unchanged after the service (installProtocolHandler recomputes it once).
     let handlerPlan: ProtocolInstallPlan | undefined;
     if (handlerOffered) {
       try {
@@ -404,27 +481,11 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
         say(`The bridge:// handler cannot be registered: ${errorMessage(error)}\n`);
       }
     }
-    let declined = false;
-    const code = await runService(["install", ...(json ? ["--json"] : [])], deps, {
-      ask: async (paths, lines) => {
-        emit({
-          event: "need_approval",
-          what: handlerPlan ? "service install and the bridge:// handler" : "service install",
-          paths: [...paths, ...(handlerPlan ? handlerPaths : [])],
-        });
-        say(`These paths will be written:\n${[...lines, ...(handlerPlan ? protocolInstallLines(deps, handlerPlan).slice(1) : [])].join("\n")}\n`);
-        const question = handlerPlan
-          ? "Run the runner as a background service, and register the bridge:// handler the page's Start button uses?"
-          : "Run the runner as a background service?";
-        const answer = answersYes || (await deps.confirm(question, { default: askDefault }));
-        if (!answer) declined = true;
-        return answer;
-      },
-    });
-    if (code === 0) useService = true;
-    else if (declined) say(`Not installing the service${handlerPlan ? " or the bridge:// handler" : ""}: the runner stays in this terminal.${handlerPlan ? ` ${handlerLater}` : ""}\n`);
-    else return stop("service_failed", "the background service could not be installed (see above)");
-    if (useService && handlerPlan) {
+    // The one consent above covered it: the hook replaces the service's own list and question (its plan is still rechecked).
+    const code = await runService(["install", ...(json ? ["--json"] : [])], deps, { ask: async () => true });
+    if (code !== 0) return stop("service_failed", "the background service could not be installed (see above)");
+    useService = true;
+    if (handlerPlan) {
       try {
         await installProtocolHandler(textDeps, { consented: true, installPlan: handlerPlan });
       } catch (error) {
@@ -529,22 +590,34 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
   const e2eeApp = e2eeAppOf(app, deps);
   const trusted = await e2ee.listBrowsers(e2eeApp).then((list) => list.length, () => 0);
   if (trusted > 0) {
-    const another = interactive && (await deps.confirm(`${trusted} browser(s) already trusted for ${appName}. Pair another browser?`, { default: "no" }));
-    if (!another) {
-      say(`Ready: ${trusted} browser(s) already trusted for ${appName}. To pair another, run \`bridge enroll ${appId} --open\`.\n`);
-      emit({ event: "ready", status: "already_trusted", trustedBrowsers: trusted });
-      return finish();
-    }
+    // No question: another browser is paired with `bridge enroll`, which always compares the words.
+    say(readyLine(`${trusted} browser(s) already trusted for ${appName}.`, `${trusted} browser(s) already trusted for ${appName}`));
+    say(`To pair another browser, run \`bridge enroll ${appId} --open\`.\n`);
+    emit({ event: "ready", status: "already_trusted", trustedBrowsers: trusted });
+    return finish();
   }
 
-  const opening: Promise<void>[] = [];
+  const opening: Promise<boolean>[] = [];
+  /** Whether setup opened the enroll link itself and the opener reported no error; undefined when it did not try. */
+  let opened: Promise<boolean> | undefined;
+  let requests = 0;
+  let autoTrusted: string | undefined;
   const prompt: EnrollPrompt = {
     showCode(code, expiresAt) {
       const link = enrollLinkOf(app, code);
       emit({ event: "enroll_code", ...(link ? { url: link } : {}), code, expiresAt });
       if (link && !values["no-open"]) {
-        say(`Runner online. Opening ${link}  (code: ${code}, expires ${expiresAt})\n`);
-        opening.push(openUrlOf(deps)(link).catch(() => say(`Could not open a browser. Open the link above yourself.\n`)));
+        // On a terminal the code and the link are not printed while the opener works: the page setup opens is the
+        // one browser trusted without the words, so nobody should paste them elsewhere. A failed open prints them.
+        say(interactive ? `Runner online. Opening ${appName}'s enroll page in your browser.\n` : `Runner online. Opening ${link}  (code: ${code}, expires ${expiresAt})\n`);
+        opened = openUrlOf(deps)(link).then(
+          () => true,
+          () => {
+            say(interactive ? `Could not open a browser. Open ${link}  (code: ${code}, expires ${expiresAt})\n` : `Could not open a browser. Open the link above yourself.\n`);
+            return false;
+          },
+        );
+        opening.push(opened);
       } else if (link) {
         say(`Runner online. Open ${link}  (code: ${code}, expires ${expiresAt})\n`);
       } else {
@@ -554,6 +627,13 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
     async confirm({ label, keyId }, options) {
       const words = wordsOf(keyId);
       const shown = printable(label);
+      const first = requests++ === 0;
+      // The browser setup opened itself, on a terminal, and only the window's first request: trusted without the words.
+      if (first && interactive && opened !== undefined && (await opened)) {
+        say(`Trusting the browser '${shown}' that setup opened. Its page shows these four words:\n  ${words.join("  ")}\n`);
+        autoTrusted = keyId;
+        return true;
+      }
       emit({ event: "trust_request", label: shown, words, keyId, instructions: WORDS_RULE });
       say(`Browser '${shown}' asks to be trusted. The page shows four words.\n  ${words.join("  ")}\n`);
       // The one human step. `--yes` is not read here. An agent may be driving the terminal: it gets the rule too.
@@ -576,7 +656,10 @@ export async function runSetup(args: string[], deps: CliDeps): Promise<number> {
     // poll loop or trust prompt outlives setup.
     const outcome = await e2ee.enroll(e2eeApp, prompt, { signal: controller.signal });
     await Promise.all(opening);
-    say(`Ready: ${appName} can use your coding agent on this machine from that browser.\n`);
+    if (autoTrusted !== undefined && autoTrusted === outcome.browserKeyId) {
+      say(`Not your browser? Revoke it: \`bridge browsers revoke ${appId} ${outcome.browserKeyId}\`\n`);
+    }
+    say(readyLine(`${appName} can use your coding agent on this machine from that browser.`, `Paired: ${appName} trusts that browser`));
     emit({ event: "ready", status: "paired", label: printable(outcome.label), keyId: outcome.browserKeyId });
   } catch (error) {
     await Promise.all(opening);

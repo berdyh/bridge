@@ -138,7 +138,7 @@ disk depends on the plugin being honest.
 
 | Party | Trusted for | May cause | Never |
 |---|---|---|---|
-| The person at the terminal | Every grant | Install, update and revoke plugins; approve a plugin's MCP servers and headless tools; edit `policy.json` and an app's `config.json`; approve a new browser | Be stood in for by `--yes` on a widened grant or on the four words |
+| The person at the terminal | Every grant | Install, update and revoke plugins; approve a plugin's MCP servers and headless tools; edit `policy.json` and an app's `config.json`; approve a new browser (in an interactive `bridge setup`, opening it is the approval, see 5.2) | Be stood in for by `--yes` on a widened grant or on the four words |
 | An app's installer script | Choosing the package and its pinned hash | Install a plugin whose grant is unchanged or narrower, without a prompt | Approve a widened grant; install a published package under `--yes` without a pinned hash |
 | Machine administrator (root) | Everything; out of scope to defend against | Managed settings, hooks, extra MCP servers | The kit detects and refuses where it can; it does not claim to defend |
 | The runner, CLI and the agent adapter it installs | Enforcing what it is told | Spawn agents with the profile the runner chose | Read the agent's own config directories (`~/.claude`, `~/.codex`) while serving sessions |
@@ -304,6 +304,11 @@ through a password-authenticated key exchange that the relay merely forwards.
    runs the setup cannot answer: it must ask the person for the four words and run
    `bridge enroll approve <app> --words "..."`, which is refused if the words do not match the
    browser that is waiting. `--yes` never answers this step.
+   One exception: an interactive `bridge setup` (a terminal, no `--json`) that opened the enroll
+   link itself, with no error from the opener, trusts the first request of that window without
+   asking; the code and link are not printed, and afterwards it prints the label, the words and
+   `bridge browsers revoke <app> <keyId>`. `--json`, `--no-open`, a failed open, a later request
+   and `bridge enroll` always ask for the words, so an agent-driven run never gets past them.
 5. **Done.** On success the runner records the browser in `trust.json`. `pake/done` carries a
    proof sealed under the SPAKE2 key and bound to the enrollment and the browser key id, so a
    relay cannot forge a success. The browser id is `base64url(SHA-256(public key)[0..16])`.
@@ -482,10 +487,15 @@ state). Link states are `online`, `connecting`, `reconnecting`, `update_required
   ship an unrelated `/usr/bin/bridge` (iproute2). Every install path is listed and confirmed
   before anything is written, and `bridge doctor --paths` lists them all. `bridge uninstall`
   removes exactly bridge's own entries and leaves shared folders alone.
-- **Service.** One consent covers a background service (a systemd user unit on Linux, a launchd
-  agent on macOS) and, on Linux, the `bridge://` link handler. The handler is an untrusted
-  launcher: any web page can fire a `bridge://` link, so it accepts exactly `bridge://run` and
-  `bridge://setup?url=<origin>` and runs only fixed commands.
+- **Setup's one consent.** `bridge setup` lists every path it will write, grouped (install,
+  connect, agents, service and handler), and asks once; each step then runs as under `--yes` and
+  rechecks its own plan before writing. The agents group covers bridge's adapter and a separate
+  sign-in for claude and codex found on `PATH`, never a copy of the person's login.
+- **Service.** The background service (a systemd user unit on Linux, a launchd agent on macOS)
+  and, on Linux, the `bridge://` link handler. The handler is an untrusted launcher: any web page
+  can fire a `bridge://` link, so it accepts exactly `bridge://run` and
+  `bridge://setup?url=<origin>`, runs only fixed commands, and starts setup with `--from-link`,
+  whose one question defaults to no.
 - **Idle stop.** The runner exits on its own after 15 minutes with no browser connected for any
   app and no open plugin session (an open enrollment window counts as activity). It is a normal
   exit, so the service manager does not restart it. A page's start button (the `bridge://run`
@@ -868,7 +878,7 @@ Specific limits:
 |---|---|
 | Relay or app server compromised and forging commands | The runner acts only on frames authenticated by keys it enrolled itself. The RPC surface is narrow (ACP methods and a plugin's own `_` methods). The permission mode is set only by local policy. |
 | Relay reading content | Frames are AES-256-GCM end to end; the relay forwards bodies unparsed. It sees routing headers, timing, sizes and presence. |
-| A new controller added by a compromised server or identity account | Enrollment needs a code shown on the user's machine, a SPAKE2 exchange, and a person confirming four words. The trust list is on the runner. |
+| A new controller added by a compromised server or identity account | Enrollment needs a code shown on the user's machine, a SPAKE2 exchange, and a person confirming four words (or, in an interactive `bridge setup`, the code only ever reaching the browser setup opened, which is trusted on the window's first request). The trust list is on the runner. |
 | Phished or guessed enrollment code | 8 characters from a 20-letter alphabet, 10-minute window, single use, 5 attempts counted when the runner replies, and the person must still confirm the browser. |
 | Phished pairing code | The approval page shows the device's hostname, OS and version (app-hosted enrollment); a pending request expires in 10 minutes by default. |
 | Stolen runner credential | The device list in the app revokes it and closes its socket. With app-hosted enrollment the credential id is tombstoned and the key revoked; with the OAuth opt-in a refresh token can outlive a device revocation until the grant is revoked at the provider. Credentials sit in the OS keychain. |

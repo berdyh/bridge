@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { accessSync, constants, statSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -27,6 +28,24 @@ export function agentNameOfAdapter(adapterId: string): AgentName | undefined {
 }
 
 export { agentDirOf };
+
+/**
+ * Whether the agent's own command (`claude`, `codex`) is on `PATH` (the injected env's): the agent is installed on this
+ * machine, so `bridge setup` offers bridge's adapter and a sign-in for it. Its own sign-in runs this command.
+ */
+export function agentOnPath(deps: CliDeps, agent: AgentName): boolean {
+  for (const dir of (deps.env.PATH ?? "").split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const file = path.join(dir, agent);
+    try {
+      accessSync(file, constants.X_OK);
+      if (statSync(file).isFile()) return true;
+    } catch {
+      // not here
+    }
+  }
+  return false;
+}
 
 /** The login file inside `agentDirOf`: claude's `.credentials.json`, codex's `auth.json`. The only login the runner stages. */
 export function agentLoginFileOf(deps: CliDeps, agent: AgentName): string {
@@ -316,7 +335,7 @@ function loginCommandOf(deps: CliDeps, agent: AgentName, dir: string): { command
  * agent is never redirected: only this child is). Needs a terminal; `yes` answers the path consent.
  * Afterwards the login must be present in bridge's folder.
  */
-export async function loginInBridgeFolder(deps: CliDeps, agent: AgentName, options: { yes?: boolean; defaultYes?: boolean } = {}): Promise<LoginOutcome> {
+export async function loginInBridgeFolder(deps: CliDeps, agent: AgentName, options: { yes?: boolean; defaultYes?: boolean; /** The caller (`setup`) listed this sign-in in its own consent: no description, no question. */ consented?: boolean } = {}): Promise<LoginOutcome> {
   if (!isTTYOf(deps)) throw new UsageError(`${agent} login is interactive and needs a terminal; run \`bridge agent login ${agent} --login\` in one`);
   const file = agentLoginFileOf(deps, agent);
   const files = [file];
@@ -329,13 +348,13 @@ export async function loginInBridgeFolder(deps: CliDeps, agent: AgentName, optio
   const dir = plan.states[1]!.canonical;
   const { command, args, env } = loginCommandOf(deps, agent, dir);
   const keeps = agent === "claude" ? "its login, settings and folders such as backups/" : "its login and settings";
-  deps.stdout(
+  if (options.consented !== true) deps.stdout(
     `This runs \`${[command, ...args].join(" ")}\` with its config folder set to bridge's own: ${describePath(plan.states[1]!)}. ` +
       `${agent} writes whatever it keeps there (${keeps}) inside that folder and nothing outside it; your own ~/.${agent} is not touched.\n`,
   );
   const replacesOwn = await loginSourcedPresent(deps, agent, plan);
   if (replacesOwn) deps.stdout(replacingLine(deps, agent, dir));
-  if (!(await asked(deps, `Sign in to ${agent} for bridge now?`, options.yes === true, options.defaultYes ? "yes" : "no"))) return "declined";
+  if (!(await asked(deps, `Sign in to ${agent} for bridge now?`, options.yes === true || options.consented === true, options.defaultYes ? "yes" : "no"))) return "declined";
   // Rule B: once more after consent, right before the first write; then only the bound canonical folder is used.
   const late = await changedAfterConsent(deps, agent, files, plan);
   if (late !== undefined) {

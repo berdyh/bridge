@@ -19,37 +19,44 @@ The app URL must be `https`, or `http` on localhost. Without `npx`, run the inst
 The script downloads the checksummed release into `~/.local/share/bridge/versions/<version>/`,
 links `~/.local/bin/bridge` and `~/.local/bin/bridge-runner` to it, then runs `bridge setup` with your arguments.
 
-`bridge setup` lists the paths it will write and asks before it writes. Then, in order:
+`bridge setup` looks first and writes nothing. It prints one list of the paths it will write,
+grouped by purpose, and asks one question: `Set up bridge for <app> at <origin>? [Y/n]`. A no
+writes nothing. Steps that are already done are left out; with nothing left, there is no
+question. After your yes it runs, in order:
 
 1. **Install.** `bridge self install`: the runner goes into `~/.local/share/bridge/versions/<version>/`
    and two launcher links, `~/.local/bin/bridge` and `~/.local/bin/bridge-runner`, point at it. It
    warns when another `bridge` comes first on `PATH` (see [The `bridge` name on PATH](#the-bridge-name-on-path)).
-2. **Connect.** It reads the app's `/.well-known/bridge.json`, shows the app name, origin and
-   sign-in issuer, and asks. You approve a device code on the app's own sign-in page.
-3. **Agent login.** For each agent whose adapter is installed and that has no login in bridge's
-   folder, it asks (see [Agent logins](#agent-logins)). The adapters are not installed with
-   bridge: for an agent with none, setup names the exact command and its size
-   (`bridge agent install claude`, about 300 MB; `bridge agent install codex`, about 450 MB) and asks
-   no login until it is installed (see [Prerequisites](#prerequisites)).
-   Without a terminal it only says what is missing.
-4. **Background service and `bridge://` handler.** One question covers both. See
+2. **Connect.** It reads the app's `/.well-known/bridge.json` and opens the app's sign-in page,
+   where you approve a device code.
+3. **Agents.** For claude and codex whose own command (`claude`, `codex`) is on `PATH`: bridge's
+   adapter when it is missing (`bridge agent install <agent>`: claude about 300 MB, codex about
+   450 MB), and a separate sign-in for bridge when it has no login (`bridge agent login <agent> --login`,
+   see [Agent logins](#agent-logins)). Setup never copies your own login. An agent not on `PATH`
+   is only named, with the commands to run once it is installed. A failed download or sign-in
+   prints its command and setup goes on. Without a terminal the sign-in is reported, not run.
+4. **Background service and `bridge://` handler.** See
    [Background service](#background-service-and-the-bridge-handler).
-5. **Enroll your browser.** It starts the runner, opens the app's enroll page with the code in
-   the link, and shows four words. The page shows the same four words. Same words: confirm.
+5. **Enroll your browser.** It starts the runner and opens the app's enroll page with the code in
+   the link. The browser setup opened is trusted without a question; the terminal prints its four
+   words and `bridge browsers revoke <app> <key-id>` in case it was not yours. If the browser cannot
+   be opened (in WSL2, for instance), or with `--no-open`, setup prints the link and code and asks
+   you to compare the four words on the page with the terminal's.
 
-If setup cannot open a browser (in WSL2, for instance) it prints the link; open it yourself.
-`bridge setup <url> --plan` prints each step and its paths and writes nothing.
+The last line says `Ready` when an agent can run; otherwise it says what is missing.
+`bridge setup <url> --plan` prints each step and its paths and writes nothing. A setup started
+from a `bridge://setup` link asks the same question with no as the default (`[y/N]`).
 
 Setup options:
 
 | Option | Effect |
 |---|---|
-| `--service` | Run the runner as a background service. The path list and question still appear unless `--yes` |
-| `--foreground` | Keep the runner in this terminal. Neither the service nor the handler is asked about or installed. Ignored while the background service is installed: run `bridge service uninstall`, then setup again |
+| `--service` | Run the runner as a background service (needed with `--yes` when `setup.service` is `"ask"`) |
+| `--foreground` | Keep the runner in this terminal. Neither the service nor the handler is offered or installed. Ignored while the background service is installed: run `bridge service uninstall`, then setup again |
 | `--no-install` | Skip the install step; use the launcher that is already there |
-| `--no-open` | Print the sign-in and enroll links instead of opening them |
-| `--yes` | Answer the install, connect and service-and-handler questions. It never answers the four words or the agent-login choice |
-| `--json` | One JSON event per line on stdout, text on stderr |
+| `--no-open` | Print the sign-in and enroll links instead of opening them; the browser is then trusted only with the four words |
+| `--yes` | Answer the one question (the path list is still printed). It never answers the four words |
+| `--json` | One JSON event per line on stdout, text on stderr. The paths come as one `need_approval` event with `groups` (`install`, `connect`, `agents`, `service`); the browser always needs the four words |
 | `--plan` | Show the steps and paths, write nothing |
 
 Without a terminal and without `--yes`, setup stops before its first write. Re-running it is
@@ -57,8 +64,8 @@ safe: an app that is already connected is not connected again.
 
 ### When an agent does the setup
 
-An agent can run `bridge setup <app-url> --yes` (add `--json` for one event per line; `--json` alone has no terminal to ask on, so setup stops with `consent_required`). Setup prints the four words
-and waits. The agent must ask the person for the four words their browser page shows, then run:
+An agent can run `bridge setup <app-url> --yes` (add `--json` for one event per line; `--json` alone has no terminal to ask on, so setup stops with `consent_required`). Under `--json`, setup never
+trusts a browser by itself: it prints the four words and waits. The agent must ask the person for the four words their browser page shows, then run:
 
 ```sh
 printf '%s\n' "$WORDS" | bridge enroll approve <app> --words -
@@ -131,7 +138,7 @@ words. `--yes` does not answer this step.
 
 ## Agent logins
 
-Bridge keeps its own agent logins and never writes `~/.claude` or `~/.codex`. When setup or
+Bridge keeps its own agent logins and never writes `~/.claude` or `~/.codex`. When
 `bridge agent login` offers to copy your existing login, it first reads that login file (read only)
 to check there is one to copy, then asks before copying anything. Bridge's logins live in
 `~/.config/bridge/agents/claude/` and `~/.config/bridge/agents/codex/`. Each session
@@ -167,14 +174,12 @@ bridge agent logout claude          # signs out the login bridge made (`claude a
 `--login` needs a terminal and the agent's own command (`claude`, `codex`) on `PATH`. The
 path list is printed first. `bridge agent logout` works only on a login made with `--login`.
 
-`bridge setup` asks about each installed agent that has no login yet, and asks the copy
-question first. Both questions default to yes, so Enter copies; answer no to reach the
-separate sign-in. (A bare `bridge agent login <agent>` asks the same way; an explicit
-`--copy` or `--login` alone defaults to no.) `--yes` never
-answers either one: only an explicit `bridge agent login <agent> --copy --yes` or `--login --yes`
-consents. Without a terminal, setup skips the step and prints the commands to run later. On
-macOS Claude Code keeps its login in the Keychain, so `--copy` finds no file and `--login` may
-not leave one in bridge's folder; the command then exits 1 and says so.
+`bridge setup` only runs the separate sign-in, as part of its one question, for an agent on
+`PATH` that has no login in bridge's folder. A bare `bridge agent login <agent>` asks copy first,
+then the sign-in, both defaulting to yes; an explicit `--copy` or `--login` alone defaults to no.
+`--yes` answers only an explicit `--copy --yes` or `--login --yes`. On macOS Claude Code keeps
+its login in the Keychain, so `--copy` finds no file and `--login` may not leave one in bridge's
+folder; the command then exits 1 and says so.
 
 ### Token write-back
 
@@ -192,7 +197,7 @@ login file**, provided that file has not changed since the copy was made:
 These are plain files (folders 0700, files 0600), whichever credential store is selected:
 `BRIDGE_CREDENTIAL_STORE` does not move them. Nothing else is written. `~/.claude`, `~/.codex`,
 `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` are never staged from and never written back to. Bridge reads
-your own login file (read only) only when it offers or makes a copy: in `bridge setup`'s login step, in a
+your own login file (read only) only when it offers or makes a copy: in a
 bare `bridge agent login <agent>` and in `--copy`. The first read happens before the question, only to
 check that there is a login to copy; an accepted copy reads the file a second time after your yes.
 The runner never reads it while serving sessions. A login file in bridge's folder that is a
@@ -224,10 +229,10 @@ with the rest of `~/.config/bridge`.
 
 ## Background service and the bridge:// handler
 
-By default setup asks once: run the runner as a background service, and (on Linux) register
-the `bridge://` handler the page's Start button uses. The answer defaults to yes. One consent
-covers both, and the path list is printed first. Answer no to keep the runner in your terminal;
-the handler is then not registered either. You can add either later:
+By default setup's one question also covers running the runner as a background service and
+(on Linux) registering the `bridge://` handler the page's Start button uses. Pass `--foreground`
+to keep the runner in your terminal; the handler is then not registered either. With
+`setup.service: "ask"` the question has no default. You can add either later:
 
 ```sh
 bridge service install      # lists the paths it will write and asks first

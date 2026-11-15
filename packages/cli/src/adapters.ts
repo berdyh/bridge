@@ -309,7 +309,7 @@ async function adapterBinding(deps: CliDeps, plan: AdapterInstallPlan) {
  * Any failure removes the staging folder and leaves nothing at the destination. A complete install is kept
  * ("current", no npm); a half-made folder is refused. Without a terminal it needs `--yes`, before any write.
  */
-export async function installAdapter(deps: CliDeps, agent: AdapterAgent, run: { yes?: boolean; /** Test seam: the stack check run on the staging folder (claude: the version check of contained sessions; codex: none). */ stackCheck?: (bin: string) => void } = {}): Promise<AdapterInstallResult> {
+export async function installAdapter(deps: CliDeps, agent: AdapterAgent, run: { yes?: boolean; /** The caller (`setup`) listed these paths in its own consent and got a yes: no path list, no question. */ consented?: boolean; /** Test seam: the stack check run on the staging folder (claude: the version check of contained sessions; codex: none). */ stackCheck?: (bin: string) => void } = {}): Promise<AdapterInstallResult> {
   const kind = ADAPTER_KINDS[agent];
   await assertNoLegacyLayout(deps);
   const plan = adapterInstallPlan(deps, agent);
@@ -325,13 +325,13 @@ export async function installAdapter(deps: CliDeps, agent: AdapterAgent, run: { 
     return { outcome: "current", version: plan.version, dir: plan.dir };
   }
   await assertLayout(deps, "install into");
-  if (!run.yes && !isTTYOf(deps)) {
+  if (!run.yes && !run.consented && !isTTYOf(deps)) {
     throw new UsageError(`without a terminal, pass --yes to install the ${agent} adapter (${kind.size} from the npm registry into ${plan.dir})`);
   }
 
   const bound = await adapterBinding(deps, plan);
   const missing = [bound.appDir, bound.adaptersDir, bound.agentDir].filter((d) => d.kind === "missing");
-  deps.stdout(
+  if (!run.consented) deps.stdout(
     [
       "These paths will be written:",
       `  ${describePath(bound.dir)}  (the ${agent} adapter ${plan.version} and its dependencies: npm install of ${plan.spec} from the npm registry, --ignore-scripts, ${kind.size}, built in a staging folder next to it)`,
@@ -341,7 +341,7 @@ export async function installAdapter(deps: CliDeps, agent: AdapterAgent, run: { 
       "",
     ].join("\n"),
   );
-  if (!run.yes && !(await deps.confirm(`Install the ${agent} adapter ${plan.version} for bridge (${kind.size} from the npm registry)?`))) {
+  if (!run.yes && !run.consented && !(await deps.confirm(`Install the ${agent} adapter ${plan.version} for bridge (${kind.size} from the npm registry)?`))) {
     deps.stderr("bridge agent install: cancelled\n");
     return { outcome: "cancelled", version: plan.version };
   }

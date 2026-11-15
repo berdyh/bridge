@@ -39,6 +39,21 @@ export interface BridgeProcess {
   stop(): Promise<Finished>;
 }
 
+/** Every `bridge` process this test file started, for `startedOutput` to print when a test fails. */
+const started: { label: string; proc: BridgeProcess }[] = [];
+
+/** The last `maxChars` of each started process's stderr, labelled with its arguments: what a failed test prints. */
+export function startedOutput(maxChars = 8_000): string {
+  return started
+    .filter(({ proc }) => proc.stderr() !== "")
+    .map(({ label, proc }) => {
+      const err = proc.stderr();
+      const tail = err.length > maxChars ? `[...${err.length - maxChars} earlier characters]\n${err.slice(-maxChars)}` : err;
+      return `--- stderr of bridge ${label}\n${tail}`;
+    })
+    .join("\n");
+}
+
 export function track(child: ChildProcess): BridgeProcess {
   let stdout = "";
   let stderr = "";
@@ -249,6 +264,7 @@ export class Machine {
     const child = spawn(process.execPath, [entry, ...args], { env: this.env(extra), stdio: ["pipe", "pipe", "pipe"] });
     const proc = track(child);
     this.children.push(proc);
+    started.push({ label: args.join(" "), proc });
     return proc;
   }
 

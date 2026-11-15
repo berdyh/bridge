@@ -74,9 +74,10 @@ export function setupInstructions(options: SetupInstructionsOptions & { appId?: 
     : `If the runner is offline, open bridge://run to restart it in a terminal, or paste \`${bridge} run\`.`;
   const steps = [
     `Paste \`${oneLiner}\` into a terminal to set up ${options.appName} (${url.origin}).`,
-    "Read the exact install and work-folder paths before consenting. Approve the device code on the app's sign-in page.",
-    'The runner runs as a background service by default ([Y/n]); choose no for foreground use. Set setup.service to "ask" to always choose explicitly.',
-    "On the enroll page, click to pair this browser. Compare its four EFF words with the terminal's words and approve only if all four match.",
+    "Setup lists every path it will write and asks one question. Then approve the device code on the app's sign-in page.",
+    "It also installs bridge's adapter and runs a separate sign-in for bridge for claude or codex on your PATH; it never copies your own login.",
+    'The runner runs as a background service unless you pass --foreground. With setup.service set to "ask", the question has no default.',
+    "Setup opens the enroll page and trusts that browser without a question; the terminal shows its four words and how to revoke it. If no browser opens, compare the page's four words with the terminal's.",
     "Wait for ready. Agent sessions start in this app's work folder; add other project folders explicitly to policy.json.",
     "The runner notifies you when it starts and stops after 15 minutes without any app's browser connected.",
     restart,
@@ -96,7 +97,7 @@ export function setupInstructions(options: SetupInstructionsOptions & { appId?: 
     `Use only the bridge CLI via \`${cli}\`; never edit ~/.config, ~/.local or service files yourself.`,
     "Show every exact path list and ask me before install or service writes and their --yes flags. The device-grant page confirms the app origin, so connect --yes is allowed. An agent passing --yes is not a human confirmation; the harness's command approval is an additional gate.",
     `1. Run \`${cli} doctor --json\` and report Node version, agents and logins. If a prerequisite is missing, stop and tell me what to install or log into. Windows is unsupported; suggest WSL2.`,
-    `2. Run \`${oneLiner} --plan --json\`. Show its paths (including this app's work folder) and ask whether to install and run as a background service. Service is the default ([Y/n]); setup.service: "ask" always asks explicitly.`,
+    `2. Run \`${oneLiner} --plan --json\`. Show its paths (including this app's work folder) and ask whether to install and run as a background service. Service is the default; setup.service: "ask" always asks explicitly.`,
     `3. On my install approval, run \`${bridge} self install --yes\`. Do not suppress its path list.`,
     `4. Run \`${bridge} connect ${target} --yes --open --json\`; tell me to approve the device code on ${url.origin}'s sign-in page and wait for completion.`,
     `5. On my service approval, run \`${bridge} service install --yes\` and tell me the runner started (it also shows a desktop notification). Otherwise run \`${bridge} run\` in the background with my agreement.`,

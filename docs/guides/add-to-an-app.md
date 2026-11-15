@@ -311,8 +311,10 @@ default is the app's origin.
   them the copy is `npx @berdyh/bridge setup <appUrl>` and the bare `bridge`.
 - **`flavor: "human"`.** `oneLiner` is `npx @berdyh/bridge setup <appUrl>` (as above, pinned when you
   pass the options). `steps` tell a person at a
-  terminal what to expect: the install paths to read, the device-code sign-in, the background
-  service question, comparing the four words, and the 15-minute idle stop. `troubleshooting` is a
+  terminal what to expect: one path list and one question, the device-code sign-in, bridge's
+  adapter and separate sign-in for an agent on `PATH`, the background service, the enroll page
+  setup opens and trusts (the words are compared only when it cannot open one), and the 15-minute
+  idle stop. `troubleshooting` is a
   list of `{ problem, fix }` for the states above, plus Windows (use WSL2) and a failed setup.
 - **`flavor: "agent"`.** Adds `agentPrompt`: a prompt the user pastes into Claude Code or Codex, which
   runs the same `bridge` commands. It tells the agent to run `bridge doctor --json`, then

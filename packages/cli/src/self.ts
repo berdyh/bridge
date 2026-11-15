@@ -320,7 +320,7 @@ export function installBaseDir(deps: CliDeps, version: string): { dir?: string; 
 export interface SelfInstallRun extends SelfInstallOptions {
   /** `--yes`: skip the question. The path list is still printed. */
   yes?: boolean;
-  /** The caller (`setup`) already asked in a consent that listed these paths. */
+  /** The caller (`setup`) already asked in a consent that listed these paths: no path list, no question. */
   consented?: boolean;
 }
 
@@ -393,7 +393,7 @@ export async function selfInstall(deps: CliDeps, run: SelfInstallRun = {}): Prom
   if (writeAliasLink) lines.push(`  ${describePath(bound.link.alias)}  (the same program under the name ${RUNNER_ALIAS}: a link to ${plan.entry}${alias.kind === "ours" ? `, replacing the link to ${alias.target}` : ""})`);
   const missing = [bound.install.appDir, bound.install.versionsDir, bound.link.binDir].filter((d) => d.kind === "missing");
   if (missing.length > 0) lines.push(`  folders created when missing: ${missing.map(describePath).join(", ")}`);
-  deps.stdout(`These paths will be written:\n${lines.join("\n")}\n`);
+  if (!run.consented) deps.stdout(`These paths will be written:\n${lines.join("\n")}\n`);
   if (!run.yes && !run.consented && !(await deps.confirm(`Install bridge ${plan.version} for this user?`))) {
     deps.stderr("bridge self install: cancelled\n");
     return { outcome: "cancelled", version: plan.version };

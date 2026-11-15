@@ -6,7 +6,7 @@ set -eu
 # for the node runs before consent. npm after consent keeps it: install.sh answers for its own
 # writes, and a person's own Node flags (proxy, CA, profiling) are theirs.
 unset NODE_COMPILE_CACHE NODE_V8_COVERAGE NODE_REDIRECT_WARNINGS
-VERSION=0.2.1
+VERSION=0.2.2
 BASE=${BRIDGE_INSTALL_BASE:?set BRIDGE_INSTALL_BASE to the release base URL (https:// or file://)}
 fail() { printf '%s\n' "bridge install: $*" >&2; exit 1; }
 case $(uname -s) in
