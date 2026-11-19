@@ -56,7 +56,7 @@ function containedUnavailable(reason?: ContainmentRefusalReason): RpcError {
 }
 /** The first non-space, non-format character of a prompt is `/`: a slash command in the agent's eyes. */
 const SLASH_PROMPT = /^[\s\p{Cf}]*\//u;
-const RUNNER_INFO = { name: "bridge-runner", version: "0.2.2" };
+const RUNNER_INFO = { name: "bridge-runner", version: "0.2.3" };
 
 /**
  * The prompt content the runner advertises to browsers, and so all it forwards. ACP's
