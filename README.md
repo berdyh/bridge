@@ -101,7 +101,8 @@ run the old version's `bridge uninstall`, then `bridge setup <url>`. Details:
 
 ## Development: run the end-to-end harness
 
-Requires Node 22 or newer and pnpm. From the repository root:
+Requires Node 22 or newer and pnpm (see [Build from a clean clone](#build-from-a-clean-clone)). From the
+repository root:
 
 ```sh
 pnpm install && pnpm build
@@ -113,6 +114,27 @@ pnpm e2e:cf     # the same path against `wrangler dev` (starts `wrangler dev`, s
 with its local UI, cross-app isolation, and a check that the relay never sees
 plaintext. To drive your own real `claude`, see [Verify the whole thing](docs/guides/operate-the-runner.md#verify-the-whole-thing).
 Unit tests run with `pnpm test`, types with `pnpm typecheck`.
+
+### Build from a clean clone
+
+`package.json` pins pnpm (`packageManager`), and pnpm switches to that version on its first run in the
+checkout.
+
+- **Use pnpm from npm, not the standalone binary.** pnpm 12's standalone builds are published as
+  `@pnpm/exe.<platform>`; a standalone pnpm that switches versions asks for `@pnpm/<platform>@<version>`,
+  which does not exist for 12.x, and stops with `ERR_PNPM_NO_MATCHING_VERSION ... @pnpm/linux-x64@12.8.1`.
+  Install it with `npm install -g pnpm@12 --allow-scripts=pnpm` (npm 12 runs no install scripts unless
+  allowed, and without pnpm's the `pnpm` command is a placeholder that a shell runs but Node's
+  `spawnSync`, which `scripts/release-set.mjs` uses, refuses with `ENOEXEC`; npm 11 and older need no
+  flag), or run a one-off `npx pnpm@<the pinned version> install --frozen-lockfile`. Corepack cannot
+  start pnpm 12.
+- **The first install needs the registry.** pnpm checks the lockfile against its supply-chain policy,
+  which reads each package's registry metadata. `pnpm install --offline` works only on a machine whose
+  pnpm store and metadata cache an earlier online install filled; on a clean machine it fails with
+  `ERR_PNPM_NO_OFFLINE_META`. Run `pnpm install --frozen-lockfile` online once, then `--offline` works.
+
+With that, `pnpm install --frozen-lockfile && pnpm run build` builds every package, and
+`bash scripts/pack-check.sh` or `node scripts/release-set.mjs local <dir>` packs them.
 
 ## Privacy and paths
 

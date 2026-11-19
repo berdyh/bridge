@@ -22,7 +22,7 @@ Coding agents working in an app that uses the kit follow the same route: see "Re
 
 ## Development
 
-Node 22 or newer and pnpm (the version is pinned in `package.json`). The checks a pull request must pass are listed
+Node 22 or newer and pnpm (the version is pinned in `package.json`; [Build from a clean clone](README.md#build-from-a-clean-clone) says which pnpm switches to it and when the registry is needed). The checks a pull request must pass are listed
 under "Checks" in [AGENTS.md](AGENTS.md); run them from the repository root before you open it. Set `TMPDIR` to a
 writable folder on disk first.
 

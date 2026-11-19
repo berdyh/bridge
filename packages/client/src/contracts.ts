@@ -231,7 +231,8 @@ export interface SetupInstructionsOptions {
   platform?: "linux" | "darwin";
   /** `human`: steps for a person at a terminal. `agent`: a prompt for Claude Code or Codex. */
   flavor: SetupFlavor;
-  /** Pin the CLI the copy runs: `npx @berdyh/bridge@<cliVersion>`. Default: unpinned (latest). */
+  /** Pin the CLI the `npx` commands run (the one-liner, and the agent steps before install): `npx @berdyh/bridge@<cliVersion>`.
+   *  Later steps use the `bridge` launcher setup installs. Default: unpinned (latest). */
   cliVersion?: string;
   /** npm registry for the `npx` commands: `npx --registry <registry> ...`. Default: the user's npm config. */
   registry?: string;

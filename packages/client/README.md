@@ -105,9 +105,9 @@ presence changes.
 
 `setupInstructions` is pure structured text: one-liner, human steps,
 troubleshooting, and (for `flavor: "agent"`) an agent prompt. The optional `cliVersion` and `registry`
-pin the command: every emitted command runs through
-`npx --registry <registry> @berdyh/bridge@<cliVersion>`, in each step (the one-liner is
-`npx --registry <registry> @berdyh/bridge@<cliVersion> setup <origin>`). Pass `platform`
+pin the `npx` commands: the one-liner becomes
+`npx --registry <registry> @berdyh/bridge@<cliVersion> setup <origin>`, and the agent prompt uses the
+same prefix until `self install`. Later steps use the `bridge` launcher setup installs. Pass `platform`
 explicitly for macOS; its deterministic default is Linux. Linux copy includes the
 `bridge://run` restart link and `bridge run` fallback; macOS uses the paste
 fallback. Pass `appId` to select a connected app by id; callers that omit it

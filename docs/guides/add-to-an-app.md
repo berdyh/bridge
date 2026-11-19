@@ -305,10 +305,13 @@ only on localhost), with no credentials, query or fragment, or it throws. `platf
 the WSL2 path. An optional `appId` selects the app by its discovery id in the commands; the
 default is the app's origin.
 
-- **`cliVersion` and `registry`** (both optional) pin the command: with them every emitted command runs through
-  `npx --registry <registry> @berdyh/bridge@<cliVersion>` (the one-liner is `... setup <appUrl>`; the later
-  steps and the agent prompt use it too), so a page can name the release it was tested with or a private registry. Without
-  them the copy is `npx @berdyh/bridge setup <appUrl>` and the bare `bridge`.
+- **`cliVersion` and `registry`** (both optional) pin the `npx` commands: with them the one-liner is
+  `npx --registry <registry> @berdyh/bridge@<cliVersion> setup <appUrl>`, so a page can name the release it was
+  tested with or a private registry. The agent prompt uses the same prefix for the steps before `self install`.
+  Every later step and troubleshooting fix uses the bare `bridge`, the launcher setup installs in `~/.local/bin`:
+  each npx spelling is its own npx cache entry, so a pinned `npx` there would make npm ask "Ok to proceed?" on
+  each command, again after each release. A troubleshooting entry covers a missing launcher (rerun the
+  one-liner) and checks it with `bridge --version`, because Linux's iproute2 also ships a `bridge` command.
 - **`flavor: "human"`.** `oneLiner` is `npx @berdyh/bridge setup <appUrl>` (as above, pinned when you
   pass the options). `steps` tell a person at a
   terminal what to expect: one path list and one question, the device-code sign-in, bridge's

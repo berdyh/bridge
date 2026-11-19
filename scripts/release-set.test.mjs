@@ -3,10 +3,36 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
 import {
   runnerClosure, prepareRunnerSet, serverOnlyLeaks, publishablePackages, publishOrder, gitInfo, packVersion,
-  checkReleaseVersion, stampVersion, integrityOf, releaseNote, addReleaseNote, RELEASE_MARKER, checkLocalRegistry, npmArgs, release, versionInRegistry,
+  checkReleaseVersion, stampVersion, integrityOf, tarFiles, contentIdOf, releaseNote, addReleaseNote, RELEASE_MARKER, checkLocalRegistry, npmArgs, release, versionInRegistry,
 } from './release-set.mjs';
+
+// A gzipped ustar archive of `files` ({ path, body, mode? }) under `package/`, like `pnpm pack`.
+// Its source is also embedded in the fake pnpm below, so it uses only `require`d modules.
+function tgzOf(files, gzip) {
+  const blocks = [];
+  for (const f of files) {
+    const body = Buffer.from(f.body);
+    const h = Buffer.alloc(512);
+    const name = 'package/' + f.path;
+    const put = (at, len, text) => h.write(text.slice(0, len), at, 'ascii');
+    if (name.length > 100) { put(345, 155, name.slice(0, name.lastIndexOf('/', name.length - 1))); put(0, 100, name.slice(name.lastIndexOf('/') + 1)); }
+    else put(0, 100, name);
+    put(100, 8, (f.mode ?? 0o644).toString(8).padStart(7, '0'));
+    put(108, 8, '0000000'); put(116, 8, '0000000');
+    put(124, 12, body.length.toString(8).padStart(11, '0'));
+    put(136, 12, '00000000000');
+    h[156] = 48; put(257, 6, 'ustar'); put(263, 2, '00');
+    h.fill(32, 148, 156);
+    let sum = 0; for (const b of h) sum += b;
+    put(148, 8, sum.toString(8).padStart(6, '0') + '\0 ');
+    blocks.push(h, body, Buffer.alloc((512 - (body.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzip(Buffer.concat(blocks));
+}
 
 function fixture(t) {
   const scratch = path.resolve(import.meta.dirname, '../.ci-local/tmp');
@@ -193,26 +219,73 @@ test('the release note names the kit commit and each package integrity, and goes
   assert.match(integrity, /^sha512-[A-Za-z0-9+/]{86}==$/);
   const note = releaseNote({
     version: '0.1.2', date: '2026-11-05', commit: 'a'.repeat(40), subject: 'chore(release): 0.1.2', registry: 'http://127.0.0.1:4873',
-    packs: [{ name: '@berdyh/bridge', integrity }, { name: '@berdyh/bridge-runner', integrity }],
+    packs: [{ name: '@berdyh/bridge', integrity, contentId: 'sha256-' + '1'.repeat(64) }, { name: '@berdyh/bridge-runner', integrity, contentId: 'sha256-' + '2'.repeat(64) }],
   });
   assert.ok(note.includes('a'.repeat(40)) && note.includes('| `@berdyh/bridge-runner` |') && note.includes(integrity));
+  assert.ok(note.includes('| Package | Integrity | Content id |') && note.includes(`| \`${integrity}\` | \`sha256-${'2'.repeat(64)}\` |`));
   const doc = `# Releases\n\n${RELEASE_MARKER}\n\n### 0.1.0 (old)\n`;
   const out = addReleaseNote(doc, note);
   assert.ok(out.indexOf('### 0.1.2') > out.indexOf(RELEASE_MARKER) && out.indexOf('### 0.1.2') < out.indexOf('### 0.1.0'));
   assert.throws(() => addReleaseNote('# no marker', note), /no release-notes marker/);
 });
 
+test('the content id ignores the stamped version and changes with any other byte, mode or path', () => {
+  const pack = (version, { readme = '# kit\n', mode = 0o644, extra = [] } = {}) => tgzOf([
+    { path: 'package.json', body: JSON.stringify({ name: '@berdyh/bridge-client', version, dependencies: { '@berdyh/bridge-protocol': version, other: '1.2.3' } }, null, 2) },
+    { path: 'dist/version.js', body: `export const CLI_VERSION = "${version}";\n` },
+    { path: 'dist/info.js', body: `export const info = { name: 'x', version: '${version}' };\n` },
+    { path: 'README.md', body: readme, mode },
+    ...extra,
+  ], gzipSync);
+  const a = pack('0.2.0-g1a2b3c4'), b = pack('0.2.0-g5d6e7f8');
+  assert.notEqual(integrityOf(a), integrityOf(b));
+  assert.match(contentIdOf(a, '0.2.0-g1a2b3c4'), /^sha256-[0-9a-f]{64}$/);
+  assert.equal(contentIdOf(a, '0.2.0-g1a2b3c4'), contentIdOf(b, '0.2.0-g5d6e7f8'));
+  assert.equal(contentIdOf(pack('0.2.2'), '0.2.2'), contentIdOf(pack('0.2.3'), '0.2.3'));
+  const id = contentIdOf(a, '0.2.0-g1a2b3c4');
+  assert.notEqual(contentIdOf(pack('0.2.0-g1a2b3c4', { readme: '# kit!\n' }), '0.2.0-g1a2b3c4'), id);
+  assert.notEqual(contentIdOf(pack('0.2.0-g1a2b3c4', { mode: 0o755 }), '0.2.0-g1a2b3c4'), id);
+  assert.notEqual(contentIdOf(pack('0.2.0-g1a2b3c4', { extra: [{ path: 'dist/new.js', body: '' }] }), '0.2.0-g1a2b3c4'), id);
+  // Only the stamped version is normalized: a third-party pin or another kit version still counts.
+  const other = tgzOf([{ path: 'package.json', body: JSON.stringify({ name: '@berdyh/bridge-client', version: '0.2.2', dependencies: { '@berdyh/bridge-protocol': '0.2.1' } }) }], gzipSync);
+  const same = tgzOf([{ path: 'package.json', body: JSON.stringify({ name: '@berdyh/bridge-client', version: '0.2.2', dependencies: { '@berdyh/bridge-protocol': '0.2.2' } }) }], gzipSync);
+  assert.notEqual(contentIdOf(other, '0.2.2'), contentIdOf(same, '0.2.2'));
+});
+
+test('the content-id command reads the version from each tarball', t => {
+  const dir = fs.mkdtempSync(path.join(path.resolve(import.meta.dirname, '../.ci-local/tmp'), 'content-id-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const files = ['0.2.0-ga', '0.2.0-gb'].map(v => {
+    const file = path.join(dir, `berdyh-bridge-crypto-${v}.tgz`);
+    fs.writeFileSync(file, tgzOf([{ path: 'package.json', body: JSON.stringify({ name: '@berdyh/bridge-crypto', version: v }) }, { path: 'index.js', body: `export const v = "${v}";` }], gzipSync));
+    return file;
+  });
+  const r = spawnSync(process.execPath, [path.resolve(import.meta.dirname, 'release-set.mjs'), 'content-id', ...files], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const ids = r.stdout.trim().split('\n').map(line => line.split('  ')[0]);
+  assert.equal(ids.length, 2);
+  assert.equal(ids[0], ids[1]);
+  assert.match(ids[0], /^sha256-[0-9a-f]{64}$/);
+});
+
+test('tarFiles reads long paths through the ustar prefix and keeps the mode', () => {
+  const long = `dist/${'deep/'.repeat(25)}file.js`;
+  const files = tarFiles(tgzOf([{ path: long, body: 'x', mode: 0o755 }, { path: 'package.json', body: '{}' }], gzipSync));
+  assert.deepEqual(files.map(f => [f.path, f.mode, f.bytes.toString()]), [[long, 0o755, 'x'], ['package.json', 0o644, '{}']]);
+});
+
 // ---- the release step end to end, against fake `pnpm` and `npm` ------------------------------------
 
 const PNPM_SHIM = `#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
+${tgzOf.toString()}
 const a = process.argv.slice(2);
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ tool: 'pnpm', argv: a }) + '\\n');
 if (a[0] === 'run') process.exit(0);
 if (a[0] === '--dir') {
   const pkg = JSON.parse(fs.readFileSync(path.join(a[1], 'package.json'), 'utf8'));
   const dest = a[a.indexOf('--pack-destination') + 1];
-  fs.writeFileSync(path.join(dest, pkg.name.slice(1).replace('/', '-') + '-' + pkg.version + '.tgz'), 'tar ' + pkg.name + ' ' + pkg.version);
+  fs.writeFileSync(path.join(dest, pkg.name.slice(1).replace('/', '-') + '-' + pkg.version + '.tgz'), tgzOf([{ path: 'package.json', body: JSON.stringify(pkg) }], require('zlib').gzipSync));
   process.exit(0);
 }
 process.exit(2);

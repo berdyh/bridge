@@ -145,6 +145,10 @@ describe("setupInstructions", () => {
             "fix": "Run \`bridge doctor --json\` and review its reported prerequisites and paths.",
             "problem": "Setup or agent login failed",
           },
+          {
+            "fix": "Run \`bridge --version\`: it must print bridge's version (Linux's iproute2 also ships a \`bridge\` command). If it does not, rerun \`npx @berdyh/bridge setup https://app.example.com\`, which installs the launcher in ~/.local/bin, and put ~/.local/bin first on your PATH.",
+            "problem": "\`bridge\` is not found or is another program",
+          },
         ],
       }
     `);
@@ -193,6 +197,10 @@ describe("setupInstructions", () => {
             "fix": "Run \`bridge doctor --json\` and review its reported prerequisites and paths.",
             "problem": "Setup or agent login failed",
           },
+          {
+            "fix": "Run \`bridge --version\`: it must print bridge's version (Linux's iproute2 also ships a \`bridge\` command). If it does not, rerun \`npx @berdyh/bridge setup https://app.example.com\`, which installs the launcher in ~/.local/bin, and put ~/.local/bin first on your PATH.",
+            "problem": "\`bridge\` is not found or is another program",
+          },
         ],
       }
     `);
@@ -201,11 +209,11 @@ describe("setupInstructions", () => {
     expect(setupInstructions({ ...base, flavor: "agent", platform: "linux" })).toMatchInlineSnapshot(`
       {
         "agentPrompt": "Set up the local bridge runner for My App (https://app.example.com) on this machine.
-      Use only the bridge CLI via \`npx @berdyh/bridge\`; never edit ~/.config, ~/.local or service files yourself.
+      Use only the bridge CLI: \`npx @berdyh/bridge\` until step 3 installs the \`bridge\` launcher, then \`bridge\`. Never edit ~/.config, ~/.local or service files yourself.
       Show every exact path list and ask me before install or service writes and their --yes flags. The device-grant page confirms the app origin, so connect --yes is allowed. An agent passing --yes is not a human confirmation; the harness's command approval is an additional gate.
       1. Run \`npx @berdyh/bridge doctor --json\` and report Node version, agents and logins. If a prerequisite is missing, stop and tell me what to install or log into. Windows is unsupported; suggest WSL2.
       2. Run \`npx @berdyh/bridge setup https://app.example.com --plan --json\`. Show its paths (including this app's work folder) and ask whether to install and run as a background service. Service is the default; setup.service: "ask" always asks explicitly.
-      3. On my install approval, run \`bridge self install --yes\`. Do not suppress its path list.
+      3. On my install approval, run \`npx @berdyh/bridge self install --yes\`. Do not suppress its path list. Afterwards \`bridge --version\` must print bridge's version (Linux's iproute2 also ships a \`bridge\` command); if it does not, stop and tell me to put ~/.local/bin first on my PATH.
       4. Run \`bridge connect https://app.example.com --yes --open --json\`; tell me to approve the device code on https://app.example.com's sign-in page and wait for completion.
       5. On my service approval, run \`bridge service install --yes\` and tell me the runner started (it also shows a desktop notification). Otherwise run \`bridge run\` in the background with my agreement.
       6. Run \`bridge enroll my-app --open --json\`. Wait for trust_request. Ask me to read the four EFF words from the page, then run \`bridge enroll approve my-app --words "<the four words I supplied>"\`. Never infer, invent or copy the terminal's words as my approval. A mismatch must not be approved.
@@ -252,6 +260,10 @@ describe("setupInstructions", () => {
             "fix": "Run \`bridge doctor --json\` and review its reported prerequisites and paths.",
             "problem": "Setup or agent login failed",
           },
+          {
+            "fix": "Run \`bridge --version\`: it must print bridge's version (Linux's iproute2 also ships a \`bridge\` command). If it does not, rerun \`npx @berdyh/bridge setup https://app.example.com\`, which installs the launcher in ~/.local/bin, and put ~/.local/bin first on your PATH.",
+            "problem": "\`bridge\` is not found or is another program",
+          },
         ],
       }
     `);
@@ -260,11 +272,11 @@ describe("setupInstructions", () => {
     expect(setupInstructions({ ...base, flavor: "agent", platform: "darwin" })).toMatchInlineSnapshot(`
       {
         "agentPrompt": "Set up the local bridge runner for My App (https://app.example.com) on this machine.
-      Use only the bridge CLI via \`npx @berdyh/bridge\`; never edit ~/.config, ~/.local or service files yourself.
+      Use only the bridge CLI: \`npx @berdyh/bridge\` until step 3 installs the \`bridge\` launcher, then \`bridge\`. Never edit ~/.config, ~/.local or service files yourself.
       Show every exact path list and ask me before install or service writes and their --yes flags. The device-grant page confirms the app origin, so connect --yes is allowed. An agent passing --yes is not a human confirmation; the harness's command approval is an additional gate.
       1. Run \`npx @berdyh/bridge doctor --json\` and report Node version, agents and logins. If a prerequisite is missing, stop and tell me what to install or log into. Windows is unsupported; suggest WSL2.
       2. Run \`npx @berdyh/bridge setup https://app.example.com --plan --json\`. Show its paths (including this app's work folder) and ask whether to install and run as a background service. Service is the default; setup.service: "ask" always asks explicitly.
-      3. On my install approval, run \`bridge self install --yes\`. Do not suppress its path list.
+      3. On my install approval, run \`npx @berdyh/bridge self install --yes\`. Do not suppress its path list. Afterwards \`bridge --version\` must print bridge's version (Linux's iproute2 also ships a \`bridge\` command); if it does not, stop and tell me to put ~/.local/bin first on my PATH.
       4. Run \`bridge connect https://app.example.com --yes --open --json\`; tell me to approve the device code on https://app.example.com's sign-in page and wait for completion.
       5. On my service approval, run \`bridge service install --yes\` and tell me the runner started (it also shows a desktop notification). Otherwise run \`bridge run\` in the background with my agreement.
       6. Run \`bridge enroll my-app --open --json\`. Wait for trust_request. Ask me to read the four EFF words from the page, then run \`bridge enroll approve my-app --words "<the four words I supplied>"\`. Never infer, invent or copy the terminal's words as my approval. A mismatch must not be approved.
@@ -311,6 +323,10 @@ describe("setupInstructions", () => {
             "fix": "Run \`bridge doctor --json\` and review its reported prerequisites and paths.",
             "problem": "Setup or agent login failed",
           },
+          {
+            "fix": "Run \`bridge --version\`: it must print bridge's version (Linux's iproute2 also ships a \`bridge\` command). If it does not, rerun \`npx @berdyh/bridge setup https://app.example.com\`, which installs the launcher in ~/.local/bin, and put ~/.local/bin first on your PATH.",
+            "problem": "\`bridge\` is not found or is another program",
+          },
         ],
       }
     `);
@@ -332,36 +348,40 @@ describe("setupInstructions", () => {
   describe("pinned CLI", () => {
     const pinned = { ...base, cliVersion: "0.1.1", registry: "http://127.0.0.1:4873" };
     const cli = "npx --registry http://127.0.0.1:4873 @berdyh/bridge@0.1.1";
-    it("emits the pinned command in the one-liner, every step and the troubleshooting", () => {
+    const spansOf = (value: unknown) => [...JSON.stringify(value).matchAll(/`([^`]*)`/g)].map((match) => match[1] ?? "");
+    it("pins the one-liner and leaves every later human step on the launcher", () => {
       const result = setupInstructions({ ...pinned, flavor: "human" });
       expect(result.oneLiner).toBe(`${cli} setup https://app.example.com`);
       expect(result.steps[0]).toContain(`\`${cli} setup https://app.example.com\``);
       expect(result.troubleshooting[0]?.fix).toContain(`\`${cli} setup https://app.example.com\``);
-      const text = JSON.stringify(result);
-      expect(text).not.toMatch(/npx @berdyh\/bridge/);
-      expect(text).not.toMatch(/npx (?!--registry http:\/\/127\.0\.0\.1:4873 @berdyh\/bridge@0\.1\.1)/);
+      // Each npx spec is its own cache entry, and npm asks "Ok to proceed?" for each.
+      expect(spansOf(result).filter((span) => span.startsWith("npx ") && span !== result.oneLiner)).toEqual([]);
+      const fixes = Object.fromEntries(result.troubleshooting.map(({ problem, fix }) => [problem, fix]));
+      expect(fixes["Runner offline"]).toContain("`bridge run`");
+      expect(fixes["Online but this browser is not enrolled"]).toContain("`bridge enroll my-app --open`");
+      expect(fixes["Setup or agent login failed"]).toContain("`bridge doctor --json`");
+      expect(fixes["`bridge` is not found or is another program"]).toContain(`rerun \`${cli} setup https://app.example.com\``);
     });
-    it("emits the pinned command in every agent step", () => {
-      const prompt = setupInstructions({ ...pinned, flavor: "agent" }).agentPrompt ?? "";
-      expect(prompt).toContain(`Use only the bridge CLI via \`${cli}\``);
-      expect(prompt).toContain(`Run \`${cli} doctor --json\``);
-      expect(prompt).toContain(`Run \`${cli} setup https://app.example.com --plan --json\``);
-      expect(prompt).not.toMatch(/npx (?!--registry http:\/\/127\.0\.0\.1:4873 @berdyh\/bridge@0\.1\.1)/);
-    });
-    it("pins every bridge command of every flavor and platform, the install step included", () => {
-      for (const flavor of ["human", "agent"] as const) {
-        for (const platform of ["linux", "darwin"] as const) {
-          const result = setupInstructions({ ...pinned, flavor, platform });
-          const spans = [...JSON.stringify(result).matchAll(/`([^`]*)`/g)].map((match) => match[1] ?? "");
-          // A bare `bridge ...` is not on PATH before the install step runs.
-          expect(spans.filter((span) => /^bridge\b/.test(span)), `${flavor}/${platform}`).toEqual([]);
-          expect(spans.filter((span) => span.startsWith("npx ") && !span.startsWith(cli))).toEqual([]);
-        }
+    it("pins the agent steps before install and uses the launcher after it", () => {
+      for (const platform of ["linux", "darwin"] as const) {
+        const prompt = setupInstructions({ ...pinned, flavor: "agent", platform }).agentPrompt ?? "";
+        expect(prompt).toContain(`Run \`${cli} doctor --json\``);
+        expect(prompt).toContain(`Run \`${cli} setup https://app.example.com --plan --json\``);
+        // The launcher does not exist before this step, pinned or not.
+        expect(prompt).toContain(`3. On my install approval, run \`${cli} self install --yes\`.`);
+        const after = prompt.slice(prompt.indexOf("4. "));
+        expect(after).not.toContain("npx");
+        expect(after).toContain("`bridge connect https://app.example.com --yes --open --json`");
+        expect(after).toContain("`bridge service install --yes`");
+        expect(after).toContain("`bridge status --json`");
+        expect(spansOf(prompt).filter((span) => span.startsWith("npx ") && !span.startsWith(cli))).toEqual([]);
       }
-      const prompt = setupInstructions({ ...pinned, flavor: "agent" }).agentPrompt ?? "";
-      expect(prompt).toContain(`3. On my install approval, run \`${cli} self install --yes\`.`);
-      expect(prompt).toContain(`\`${cli} service install --yes\``);
-      expect(prompt).toContain(`\`${cli} status --json\``);
+    });
+    it("runs self install through npx in the unpinned agent prompt too", () => {
+      const prompt = setupInstructions({ ...base, flavor: "agent" }).agentPrompt ?? "";
+      expect(prompt).toContain("3. On my install approval, run `npx @berdyh/bridge self install --yes`.");
+      const before = prompt.slice(0, prompt.indexOf("3. "));
+      expect(spansOf(before).filter((span) => /^bridge\b/.test(span) && span !== "bridge")).toEqual([]);
     });
     it("pins the version alone or the registry alone", () => {
       expect(setupInstructions({ ...base, cliVersion: "0.1.1", flavor: "human" }).oneLiner).toBe("npx @berdyh/bridge@0.1.1 setup https://app.example.com");

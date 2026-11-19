@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -221,16 +222,71 @@ export function stampVersion(root, version) {
 
 export const integrityOf = bytes => `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
 
-/** The note an app pins from: kit commit, version, and each package's integrity. */
+/** The regular files of a gzipped npm tarball, as `{ path, mode, bytes }`, with the `package/` prefix removed. */
+export function tarFiles(tgz) {
+  const tar = gunzipSync(tgz);
+  const field = (h, at, len) => h.subarray(at, at + len).toString('utf8').replace(/\0.*$/s, '');
+  const files = [];
+  let longName;
+  for (let at = 0; at + 512 <= tar.length;) {
+    const h = tar.subarray(at, at + 512);
+    if (h.every(b => b === 0)) break;
+    const size = parseInt(field(h, 124, 12).trim() || '0', 8);
+    const type = String.fromCharCode(h[156] || 48);
+    const body = tar.subarray(at + 512, at + 512 + size);
+    at += 512 + Math.ceil(size / 512) * 512;
+    if (type === 'x') { longName = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'))?.[1] ?? longName; continue; }
+    if (type === 'L') { longName = body.toString('utf8').replace(/\0.*$/s, ''); continue; }
+    const prefix = field(h, 345, 155);
+    const name = longName ?? (prefix ? `${prefix}/${field(h, 0, 100)}` : field(h, 0, 100));
+    longName = undefined;
+    if (type !== '0') continue;
+    files.push({ path: name.replace(/^package\//, ''), mode: parseInt(field(h, 100, 8).trim() || '0', 8) & 0o777, bytes: Buffer.from(body) });
+  }
+  return files;
+}
+
+const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies', 'devDependencies'];
+
+/**
+ * A package's content identity, which ignores the version the release step stamped: sha256 over
+ * each file's path, mode and sha256, with the version written back to a placeholder. In
+ * `package.json` that is `version` and every `@berdyh/*` dependency; in any other file, the quoted
+ * version literal (`CLI_VERSION`, the runner's ACP info). Two packs with the same content id differ
+ * only in their version, so an app can move its pin without re-reviewing the package.
+ */
+export function contentIdOf(tgz, version) {
+  const PLACEHOLDER = '0.0.0-content';
+  const lines = tarFiles(tgz).map(({ path: name, mode, bytes }) => {
+    let normalized = bytes;
+    if (name === 'package.json') {
+      const pkg = JSON.parse(bytes.toString('utf8'));
+      if (pkg.version === version) pkg.version = PLACEHOLDER;
+      for (const key of DEPENDENCY_FIELDS) for (const dep of Object.keys(pkg[key] ?? {})) {
+        if (dep.startsWith('@berdyh/') && pkg[key][dep] === version) pkg[key][dep] = PLACEHOLDER;
+      }
+      normalized = Buffer.from(JSON.stringify(pkg));
+    } else {
+      const text = bytes.toString('utf8');
+      for (const q of ['"', "'"]) {
+        if (text.includes(`${q}${version}${q}`)) normalized = Buffer.from(normalized.toString('utf8').split(`${q}${version}${q}`).join(`${q}${PLACEHOLDER}${q}`));
+      }
+    }
+    return `${createHash('sha256').update(normalized).digest('hex')} ${mode.toString(8)} ${name}\n`;
+  }).sort((a, b) => (a.slice(69) < b.slice(69) ? -1 : a.slice(69) > b.slice(69) ? 1 : 0));
+  return `sha256-${createHash('sha256').update(lines.join('')).digest('hex')}`;
+}
+
+/** The note an app pins from: kit commit, version, and each package's integrity and content id. */
 export function releaseNote({ version, date, commit, subject, registry, packs }) {
-  const rows = packs.map(p => `| \`${p.name}\` | \`${p.integrity}\` |`);
+  const rows = packs.map(p => `| \`${p.name}\` | \`${p.integrity}\` | \`${p.contentId}\` |`);
   return [
     `### ${version} (${date}), kit commit \`${commit}\``,
     '',
-    `Cut from \`${commit}\` (${subject}) and published to the local registry ${registry}. All ${packs.length} packages carry ${version} and nothing else. Pin by version and integrity:`,
+    `Cut from \`${commit}\` (${subject}) and published to the local registry ${registry}. All ${packs.length} packages carry ${version} and nothing else. Pin by version and integrity. A package whose content id matches an earlier release differs from it only in the version:`,
     '',
-    '| Package | Integrity |',
-    '|---|---|',
+    '| Package | Integrity | Content id |',
+    '|---|---|---|',
     ...rows,
     '',
   ].join('\n');
@@ -295,7 +351,7 @@ export function packAll(root, version, dest, { keep = false, rebuild = false } =
       must('pnpm', ['--dir', p.dir, 'pack', '--pack-destination', dest], { stdio: ['ignore', 'ignore', 'inherit'] });
       const file = `${p.pkg.name.slice(1).replace('/', '-')}-${version}.tgz`;
       const bytes = fs.readFileSync(path.join(dest, file));
-      return { name: p.pkg.name, version, file, integrity: integrityOf(bytes), sha256: createHash('sha256').update(bytes).digest('hex') };
+      return { name: p.pkg.name, version, file, integrity: integrityOf(bytes), sha256: createHash('sha256').update(bytes).digest('hex'), contentId: contentIdOf(bytes, version) };
     });
     fs.writeFileSync(path.join(dest, 'SHA256SUMS'), packs.map(p => `${p.sha256}  ${p.file}\n`).join(''));
     fs.writeFileSync(path.join(dest, 'packs.json'), JSON.stringify(packs, null, 2) + '\n');
@@ -368,7 +424,16 @@ export function release(root, { version, registry, dest, npmrc, keep = false, no
   return { version, info, packs };
 }
 
+/** The content id of a tarball, at the version its own package.json carries. */
+export function contentIdOfFile(file) {
+  const bytes = fs.readFileSync(file);
+  const manifest = tarFiles(bytes).find(f => f.path === 'package.json');
+  if (!manifest) throw new Error(`${file} has no package/package.json`);
+  return contentIdOf(bytes, JSON.parse(manifest.bytes.toString('utf8')).version);
+}
+
 // node scripts/release-set.mjs local <dest> [--rebuild]
+// node scripts/release-set.mjs content-id <tarball>...
 // node scripts/release-set.mjs release <x.y.z> <dest> --registry <loopback url> [--npmrc <file>] [--keep] [--notes <file>]
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -382,6 +447,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const dest = path.resolve(args[0]);
       const r = localPacks(root, dest, { rebuild });
       console.log(`local packs ${r.version} (${r.packs.length}) in ${path.join(dest, r.version)}`);
+    } else if (cmd === 'content-id') {
+      if (!args.length) throw new Error('usage: content-id <tarball>...');
+      for (const file of args) console.log(`${contentIdOfFile(path.resolve(file))}  ${path.basename(file)}`);
     } else if (cmd === 'release') {
       const registry = opt('--registry');
       const npmrc = opt('--npmrc');
@@ -392,7 +460,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const r = release(root, { version, registry, dest: path.resolve(dest), npmrc: npmrc && path.resolve(npmrc), keep, notes: notes && path.resolve(notes) });
       console.log(`released ${r.version} (${r.packs.length} packages) from ${r.info.full}; ${notes ? `note added to ${notes}` : 'no release note written (no --notes)'}`);
     } else {
-      throw new Error('usage: release-set.mjs local <dest> | release <x.y.z> <dest> --registry <url>');
+      throw new Error('usage: release-set.mjs local <dest> | content-id <tarball>... | release <x.y.z> <dest> --registry <url>');
     }
   } catch (e) {
     console.error(`release-set: ${e.message}`);

@@ -63,11 +63,12 @@ export function setupInstructions(options: SetupInstructionsOptions & { appId?: 
   const app = argument(options.appId ?? url.origin);
   if (options.cliVersion !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(options.cliVersion)) throw new Error("invalid cliVersion");
   if (options.registry !== undefined && !/^https?:\/\//.test(options.registry)) throw new Error("registry must be an http(s) URL");
-  // Every emitted `npx` command shares this prefix, so a pin or registry reaches each step.
+  // Commands that run before the launcher exists go through npx, with the pin and registry.
   const cli = ["npx", ...(options.registry === undefined ? [] : ["--registry", argument(options.registry)]),
     `@berdyh/bridge${options.cliVersion === undefined ? "" : `@${options.cliVersion}`}`].join(" ");
-  // Unpinned copy keeps the bare launcher; a pin or registry also covers every later command, install step included.
-  const bridge = options.cliVersion === undefined && options.registry === undefined ? "bridge" : cli;
+  // Setup installs the `bridge` launcher, so every later command uses it: each npx spec is its own
+  // npx cache entry, and npm asks "Ok to proceed?" again for each one.
+  const bridge = "bridge";
   const oneLiner = `${cli} setup ${target}`;
   const restart = options.platform === "darwin"
     ? `If the runner is offline, paste \`${bridge} run\` into a terminal to restart it.`
@@ -90,15 +91,16 @@ export function setupInstructions(options: SetupInstructionsOptions & { appId?: 
     { problem: "Restart link does not open a terminal", fix: options.platform === "darwin" ? `macOS uses the paste fallback: \`${bridge} run\`.` : `Paste \`${bridge} run\`, or rerun setup to register the Linux protocol handler after reviewing its paths.` },
     { problem: "Windows", fix: "Windows is unsupported. Use WSL2 and follow the Linux setup steps." },
     { problem: "Setup or agent login failed", fix: `Run \`${bridge} doctor --json\` and review its reported prerequisites and paths.` },
+    { problem: "`bridge` is not found or is another program", fix: `Run \`bridge --version\`: it must print bridge's version (Linux's iproute2 also ships a \`bridge\` command). If it does not, rerun \`${oneLiner}\`, which installs the launcher in ~/.local/bin, and put ~/.local/bin first on your PATH.` },
   ];
   if (options.flavor === "human") return { flavor: "human", oneLiner, steps, troubleshooting };
   const agentPrompt = [
     `Set up the local bridge runner for ${options.appName} (${options.appUrl}) on this machine.`,
-    `Use only the bridge CLI via \`${cli}\`; never edit ~/.config, ~/.local or service files yourself.`,
+    `Use only the bridge CLI: \`${cli}\` until step 3 installs the \`bridge\` launcher, then \`bridge\`. Never edit ~/.config, ~/.local or service files yourself.`,
     "Show every exact path list and ask me before install or service writes and their --yes flags. The device-grant page confirms the app origin, so connect --yes is allowed. An agent passing --yes is not a human confirmation; the harness's command approval is an additional gate.",
     `1. Run \`${cli} doctor --json\` and report Node version, agents and logins. If a prerequisite is missing, stop and tell me what to install or log into. Windows is unsupported; suggest WSL2.`,
     `2. Run \`${oneLiner} --plan --json\`. Show its paths (including this app's work folder) and ask whether to install and run as a background service. Service is the default; setup.service: "ask" always asks explicitly.`,
-    `3. On my install approval, run \`${bridge} self install --yes\`. Do not suppress its path list.`,
+    `3. On my install approval, run \`${cli} self install --yes\`. Do not suppress its path list. Afterwards \`bridge --version\` must print bridge's version (Linux's iproute2 also ships a \`bridge\` command); if it does not, stop and tell me to put ~/.local/bin first on my PATH.`,
     `4. Run \`${bridge} connect ${target} --yes --open --json\`; tell me to approve the device code on ${url.origin}'s sign-in page and wait for completion.`,
     `5. On my service approval, run \`${bridge} service install --yes\` and tell me the runner started (it also shows a desktop notification). Otherwise run \`${bridge} run\` in the background with my agreement.`,
     `6. Run \`${bridge} enroll ${app} --open --json\`. Wait for trust_request. Ask me to read the four EFF words from the page, then run \`${bridge} enroll approve ${app} --words "<the four words I supplied>"\`. Never infer, invent or copy the terminal's words as my approval. A mismatch must not be approved.`,
